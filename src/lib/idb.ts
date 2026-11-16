@@ -2,7 +2,7 @@
 // SpeechCoach stores everything locally so progress survives app updates and works offline.
 
 const DB_NAME = "speechcoach";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -32,6 +32,13 @@ function getDB(): Promise<IDBDatabase> {
           r.createIndex("createdAt", "createdAt", { unique: false });
         }
         if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs");
+      }
+      // ---- Migration to v3: smart daily coaching debriefs ----
+      if (old < 3) {
+        if (!db.objectStoreNames.contains("debriefs")) {
+          const d = db.createObjectStore("debriefs", { keyPath: "id" });
+          d.createIndex("createdAt", "createdAt", { unique: false });
+        }
       }
       // Future migrations: add `if (old < N)` blocks here. Existing data is never dropped.
     };
@@ -65,7 +72,7 @@ export const idbGet = <T>(store: string, key: string | number): Promise<T | unde
 export const idbAll = <T>(store: string): Promise<T[]> => run<T[]>(store, "readonly", (s) => s.getAll());
 
 export const idbPut = (store: string, value: unknown, key?: IDBValidKey): Promise<IDBValidKey> =>
-  run<IDBValidKey>(store, "readwrite", (s) => (key !== undefined ? s.put(value as any, key) : s.put(value as any)));
+  run<IDBValidKey>(store, "readwrite", (s) => (key !== undefined ? s.put(value, key) : s.put(value)));
 
 export const idbDelete = (store: string, key: string | number): Promise<void> =>
   run<void>(store, "readwrite", (s) => {

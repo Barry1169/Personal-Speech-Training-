@@ -16,24 +16,29 @@ const PHASE_LABEL: Record<Phase, string> = {
 const PHASE_FREQ: Record<Phase, number> = { inhale: 520, hold: 660, exhale: 440 };
 
 export default function BreathingTrainer() {
-  const { settings, setSettings } = useStore();
+  const { settings, setSettings, addLog, toast } = useStore();
   const [pat, setPat] = useState(settings.breathing);
   const [state, setState] = useState<State>("idle");
   const [phase, setPhase] = useState<Phase>("inhale");
   const [phaseLeft, setPhaseLeft] = useState(pat.inhale);
   const [cycle, setCycle] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const [scale, setScale] = useState(1);
   const [sound, setSound] = useState(true);
 
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioCtx = useRef<AudioContext | null>(null);
   const soundRef = useRef(sound);
-  soundRef.current = sound;
   const patRef = useRef(pat);
-  patRef.current = pat;
   const phaseRef = useRef<Phase>("inhale");
   const leftRef = useRef(pat.inhale);
+
+  useEffect(() => {
+    soundRef.current = sound;
+  }, [sound]);
+
+  useEffect(() => {
+    patRef.current = pat;
+  }, [pat]);
 
   const beep = (freq: number) => {
     if (!soundRef.current) return;
@@ -50,13 +55,17 @@ export default function BreathingTrainer() {
       o.connect(g).connect(ctx.destination);
       o.start();
       o.stop(ctx.currentTime + 0.25);
-    } catch { /* audio not available */ }
+    } catch {
+      /* audio not available */
+    }
   };
 
-  // The tick loop lives entirely in refs — no side effects inside state updaters.
   useEffect(() => {
     if (state !== "running") {
-      if (timer.current) { clearInterval(timer.current); timer.current = null; }
+      if (timer.current) {
+        clearInterval(timer.current);
+        timer.current = null;
+      }
       return;
     }
     timer.current = setInterval(() => {
@@ -67,7 +76,10 @@ export default function BreathingTrainer() {
         let next: Phase;
         if (phaseRef.current === "inhale") next = p.hold > 0 ? "hold" : "exhale";
         else if (phaseRef.current === "hold") next = "exhale";
-        else { next = "inhale"; setCycle((c) => c + 1); }
+        else {
+          next = "inhale";
+          setCycle((c) => c + 1);
+        }
         phaseRef.current = next;
         leftRef.current = Math.max(1, next === "inhale" ? p.inhale : next === "hold" ? p.hold : p.exhale);
         beep(PHASE_FREQ[next]);
@@ -75,27 +87,24 @@ export default function BreathingTrainer() {
       }
       setPhaseLeft(leftRef.current);
     }, 1000);
-    return () => { if (timer.current) { clearInterval(timer.current); timer.current = null; } };
+    return () => {
+      if (timer.current) {
+        clearInterval(timer.current);
+        timer.current = null;
+      }
+    };
   }, [state]);
 
-  // Keep the idle countdown in sync when the pattern changes
-  useEffect(() => {
+  const updatePattern = (nextPat: { inhale: number; hold: number; exhale: number }) => {
+    setPat(nextPat);
+    setSettings({ breathing: nextPat });
     if (state === "idle") {
-      leftRef.current = Math.max(1, pat.inhale);
       phaseRef.current = "inhale";
+      leftRef.current = Math.max(1, nextPat.inhale);
       setPhase("inhale");
       setPhaseLeft(leftRef.current);
     }
-  }, [pat.inhale, state]);
-
-  // Visual scale: animate on phase start
-  useEffect(() => {
-    if (state === "idle") { setScale(1); return; }
-    if (phase === "inhale") setScale(1.42);
-    else if (phase === "exhale") setScale(1);
-    // hold keeps current scale
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, state]);
+  };
 
   const start = () => {
     phaseRef.current = "inhale";
@@ -109,17 +118,27 @@ export default function BreathingTrainer() {
   };
 
   const stop = () => {
+    if (elapsed >= 20) {
+      addLog({
+        seconds: elapsed,
+        mode: "breathing",
+        completed: Math.max(1, cycle),
+        scores: null,
+        note: `Breathing (${pat.inhale}-${pat.hold}-${pat.exhale}, ${cycle} cycle${cycle === 1 ? "" : "s"})`,
+      });
+      toast(`Logged ${Math.max(1, Math.round(elapsed / 60))} min of breathing warm-up`);
+    }
     setState("idle");
     phaseRef.current = "inhale";
     leftRef.current = Math.max(1, pat.inhale);
     setPhase("inhale");
     setPhaseLeft(leftRef.current);
-    setScale(1);
   };
 
+  // Purely derived scale (no setState inside useEffect!)
+  const scale = state === "idle" ? 1 : phase === "inhale" || phase === "hold" ? 1.42 : 1;
   const dur = phase === "inhale" ? pat.inhale : phase === "hold" ? Math.max(1, pat.hold) : pat.exhale;
   const progress = 1 - phaseLeft / Math.max(1, dur);
-
   const fmt = (s: number) => `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
 
   return (
@@ -131,7 +150,7 @@ export default function BreathingTrainer() {
             className="flex h-[210px] w-[210px] items-center justify-center rounded-full"
             style={{
               background: "radial-gradient(circle at 35% 30%, var(--brand-soft), var(--brand) 70%)",
-              transform: `scale(${state === "idle" ? 1 : scale})`,
+              transform: `scale(${scale})`,
               transition: state === "running" || state === "paused" ? `transform ${dur}s linear` : "transform .6s ease",
               boxShadow: "0 10px 40px -8px color-mix(in srgb, var(--brand) 45%, transparent)",
             }}
@@ -152,7 +171,13 @@ export default function BreathingTrainer() {
             <svg className="absolute" width="260" height="260" viewBox="0 0 260 260">
               <circle cx="130" cy="130" r="124" fill="none" stroke="var(--line)" strokeWidth="3" />
               <circle
-                cx="130" cy="130" r="124" fill="none" stroke="var(--accent)" strokeWidth="3" strokeLinecap="round"
+                cx="130"
+                cy="130"
+                r="124"
+                fill="none"
+                stroke="var(--accent)"
+                strokeWidth="3"
+                strokeLinecap="round"
                 strokeDasharray={`${2 * Math.PI * 124}`}
                 strokeDashoffset={`${2 * Math.PI * 124 * (1 - progress)}`}
                 transform="rotate(-90 130 130)"
@@ -162,11 +187,11 @@ export default function BreathingTrainer() {
           )}
         </div>
 
-        <div className="mt-2 flex items-center gap-3">
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
           {state === "idle" && <Btn onClick={start}>Start</Btn>}
           {state === "running" && <Btn variant="soft" onClick={() => setState("paused")}>Pause</Btn>}
           {state === "paused" && <Btn onClick={() => setState("running")}>Resume</Btn>}
-          {state !== "idle" && <Btn variant="danger" onClick={stop}>Stop</Btn>}
+          {state !== "idle" && <Btn variant="danger" onClick={stop}>{elapsed >= 20 ? "Stop & Log" : "Stop"}</Btn>}
           <label className="ml-2 flex cursor-pointer items-center gap-2 text-[12.5px] text-[var(--muted)]">
             <input type="checkbox" checked={sound} onChange={(e) => setSound(e.target.checked)} className="accent-[var(--brand)]" />
             Phase chime
@@ -184,22 +209,40 @@ export default function BreathingTrainer() {
         <Card title="Custom pattern" sub="Saved automatically to your settings. Long exhale = calm; equal timing = activation.">
           <div className="grid grid-cols-3 gap-3">
             <Field label="Inhale (s)">
-              <Input type="number" min={1} max={15} value={pat.inhale} onChange={(e) => {
-                const v = Math.min(15, Math.max(1, Number(e.target.value) || 1));
-                setPat((p) => { const n = { ...p, inhale: v }; setSettings({ breathing: n }); return n; });
-              }} />
+              <Input
+                type="number"
+                min={1}
+                max={15}
+                value={pat.inhale}
+                onChange={(e) => {
+                  const v = Math.min(15, Math.max(1, Number(e.target.value) || 1));
+                  updatePattern({ ...pat, inhale: v });
+                }}
+              />
             </Field>
             <Field label="Hold (s)">
-              <Input type="number" min={0} max={20} value={pat.hold} onChange={(e) => {
-                const v = Math.min(20, Math.max(0, Number(e.target.value) || 0));
-                setPat((p) => { const n = { ...p, hold: v }; setSettings({ breathing: n }); return n; });
-              }} />
+              <Input
+                type="number"
+                min={0}
+                max={20}
+                value={pat.hold}
+                onChange={(e) => {
+                  const v = Math.min(20, Math.max(0, Number(e.target.value) || 0));
+                  updatePattern({ ...pat, hold: v });
+                }}
+              />
             </Field>
             <Field label="Exhale (s)">
-              <Input type="number" min={1} max={20} value={pat.exhale} onChange={(e) => {
-                const v = Math.min(20, Math.max(1, Number(e.target.value) || 1));
-                setPat((p) => { const n = { ...p, exhale: v }; setSettings({ breathing: n }); return n; });
-              }} />
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={pat.exhale}
+                onChange={(e) => {
+                  const v = Math.min(20, Math.max(1, Number(e.target.value) || 1));
+                  updatePattern({ ...pat, exhale: v });
+                }}
+              />
             </Field>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -209,7 +252,11 @@ export default function BreathingTrainer() {
               { n: "Box 4-4-4", v: { inhale: 4, hold: 4, exhale: 4 } },
               { n: "Speak 5-2-8", v: { inhale: 5, hold: 2, exhale: 8 } },
             ].map((p) => (
-              <button key={p.n} className="chip chip-muted cursor-pointer hover:chip-hover" onClick={() => { setPat(p.v); setSettings({ breathing: p.v }); }}>
+              <button
+                key={p.n}
+                className="chip chip-muted cursor-pointer hover:chip-hover"
+                onClick={() => updatePattern(p.v)}
+              >
                 {p.n}
               </button>
             ))}

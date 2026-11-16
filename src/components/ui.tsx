@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
-import type { VolumeSample } from "@/lib/types";
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { PitchSample, PracticeLog, VolumeSample } from "@/lib/types";
 
 // ---------- Buttons ----------
 
@@ -248,47 +248,267 @@ export function Stat({ label, value, sub, tone }: { label: string; value: React.
 
 // ---------- Timer ----------
 
-export function Timer({ seconds, className = "", onTick }: { seconds: number; className?: string; onTick?: (elapsedSec: number) => void }) {
-  const [left, setLeft] = useState(seconds);
+function playTimerChime() {
+  try {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return;
+    const ctx = new AC();
+    if (ctx.state === "suspended") void ctx.resume();
+    const notes = [523.25, 659.25, 783.99]; // soft C5 -> E5 -> G5 chime
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const start = ctx.currentTime + idx * 0.13;
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.11, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.45);
+    });
+    setTimeout(() => {
+      ctx.close().catch(() => undefined);
+    }, 1200);
+  } catch {
+    /* Web Audio unavailable */
+  }
+}
+
+function TimerInner({
+  seconds,
+  className = "",
+  onTick,
+  onComplete,
+}: {
+  seconds: number;
+  className?: string;
+  onTick?: (elapsedSec: number) => void;
+  onComplete?: () => void;
+}) {
+  const safeSeconds = Math.max(5, Math.round(seconds));
+  const [left, setLeft] = useState(safeSeconds);
   const [running, setRunning] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [finished, setFinished] = useState(false);
   const iv = useRef<ReturnType<typeof setInterval> | null>(null);
   const tickRef = useRef(onTick);
-  tickRef.current = onTick;
+  const completeRef = useRef(onComplete);
 
   useEffect(() => {
-    if (running) {
-      iv.current = setInterval(() => {
-        setElapsed((e) => {
-          const ne = e + 1;
-          tickRef.current?.(ne);
-          return ne;
-        });
-        setLeft((l) => {
-          if (l <= 1) { setRunning(false); return 0; }
-          return l - 1;
-        });
-      }, 1000);
-    }
-    return () => { if (iv.current) clearInterval(iv.current); };
+    tickRef.current = onTick;
+    completeRef.current = onComplete;
+  }, [onTick, onComplete]);
+
+  useEffect(() => {
+    if (!running) return;
+    iv.current = setInterval(() => {
+      setElapsed((e) => {
+        const ne = e + 1;
+        tickRef.current?.(ne);
+        return ne;
+      });
+      setLeft((l) => {
+        if (l <= 1) {
+          setRunning(false);
+          setFinished(true);
+          playTimerChime();
+          completeRef.current?.();
+          return 0;
+        }
+        return l - 1;
+      });
+    }, 1000);
+    return () => {
+      if (iv.current) clearInterval(iv.current);
+    };
   }, [running]);
 
   const mm = Math.floor(left / 60).toString().padStart(2, "0");
   const ss = (left % 60).toString().padStart(2, "0");
+  const fullMm = Math.floor(safeSeconds / 60).toString().padStart(2, "0");
+  const fullSs = (safeSeconds % 60).toString().padStart(2, "0");
   const em = Math.floor(elapsed / 60).toString().padStart(2, "0");
   const es = (elapsed % 60).toString().padStart(2, "0");
+  const pct = Math.min(100, Math.max(0, ((safeSeconds - left) / safeSeconds) * 100));
+
+  const handlePrimary = () => {
+    if (running) {
+      setRunning(false);
+    } else if (left === 0) {
+      setLeft(safeSeconds);
+      setFinished(false);
+      setRunning(true);
+    } else {
+      setFinished(false);
+      setRunning(true);
+    }
+  };
+
+  const handleReset = () => {
+    setRunning(false);
+    setLeft(safeSeconds);
+    setElapsed(0);
+    setFinished(false);
+  };
 
   return (
-    <div className={`inline-flex items-center gap-2 ${className}`}>
-      <span className={`timer-chip ${left === 0 && elapsed > 0 ? "timer-done" : ""}`}>
-        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="6" cy="6" r="4.6" /><path d="M6 3.5V6l1.8 1" /></svg>
-        {mm}:{ss}
-      </span>
-      <Btn variant="soft" onClick={() => { setRunning((r) => !r); }} disabled={left === 0 && !running}>
-        {running ? "Pause" : left === 0 ? "Run again" : "Start"}
-      </Btn>
-      <Btn variant="ghost" onClick={() => { setRunning(false); setLeft(seconds); setElapsed(0); }}>Reset</Btn>
-      {elapsed > 0 && <span className="text-[11px] tabular-nums text-[var(--muted)]">practiced {em}:{es}</span>}
+    <div className={`inline-flex flex-col gap-1.5 ${className}`}>
+      <div className="inline-flex flex-wrap items-center gap-2">
+        <span
+          className={`timer-chip ${finished || left === 0 ? "timer-done" : running ? "timer-running" : ""}`}
+        >
+          {finished || left === 0 ? (
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2">
+              <path d="M3.5 8.5l3 3 6-6.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          ) : (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="6" cy="6" r="4.6" />
+              <path d="M6 3.5V6l1.8 1" />
+            </svg>
+          )}
+          {mm}:{ss}
+        </span>
+
+        <Btn variant={left === 0 ? "primary" : "soft"} onClick={handlePrimary}>
+          {running ? "Pause" : left === 0 ? "Run again" : elapsed > 0 ? "Resume" : "Start"}
+        </Btn>
+
+        <Btn variant="ghost" onClick={handleReset} title={`Reset timer to ${fullMm}:${fullSs}`}>
+          Reset
+        </Btn>
+
+        {finished && (
+          <span className="animate-pop inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--good)_15%,transparent)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--good)]">
+            ✓ Time&apos;s up! Nice work
+          </span>
+        )}
+
+        {!finished && elapsed > 0 && (
+          <span className="text-[11px] tabular-nums text-[var(--muted)]">practiced {em}:{es}</span>
+        )}
+      </div>
+
+      {/* Live visual countdown bar */}
+      <div className="h-1.5 w-full min-w-[180px] overflow-hidden rounded-full bg-[var(--panel2)]">
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{
+            width: `${pct}%`,
+            background: finished || left === 0 ? "var(--good)" : "var(--brand)",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function Timer({
+  seconds,
+  resetKey,
+  className = "",
+  onTick,
+  onComplete,
+}: {
+  seconds: number;
+  resetKey?: string | number;
+  className?: string;
+  onTick?: (elapsedSec: number) => void;
+  onComplete?: () => void;
+}) {
+  return (
+    <TimerInner
+      key={`${resetKey ?? "timer"}-${seconds}`}
+      seconds={seconds}
+      className={className}
+      onTick={onTick}
+      onComplete={onComplete}
+    />
+  );
+}
+
+// ---------- Live animated voice equalizer ----------
+
+export function VoiceWaveBars({ level = 0.08, bars = 12 }: { level?: number; bars?: number }) {
+  const weights = [0.45, 0.72, 0.95, 0.65, 1.0, 0.84, 0.92, 0.58, 0.96, 0.78, 0.62, 0.42];
+  const norm = Math.min(1, Math.max(0.08, level * 7));
+  return (
+    <div className="flex h-7 items-center gap-[3px]" aria-hidden>
+      {Array.from({ length: bars }, (_, i) => {
+        const w = weights[i % weights.length];
+        const h = Math.round(5 + norm * w * 22);
+        return <span key={i} className="voice-bar" style={{ height: `${h}px` }} />;
+      })}
+    </div>
+  );
+}
+
+// ---------- Microphone / Iframe helper banner ----------
+
+const noopSubscribe = () => () => undefined;
+function getInIframeSnapshot(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+function getHostSnapshot(): string {
+  try {
+    return window.location.hostname;
+  } catch {
+    return "";
+  }
+}
+
+export function MicHelperBanner({
+  error,
+  onManual,
+}: {
+  error: string | null;
+  onManual?: () => void;
+}) {
+  const inIframe = useSyncExternalStore(noopSubscribe, getInIframeSnapshot, () => false);
+  const host = useSyncExternalStore(noopSubscribe, getHostSnapshot, () => "");
+  const isArenaPreview = inIframe && host.endsWith(".e2b.app");
+
+  if (!error && !inIframe) return null;
+
+  return (
+    <div
+      className={`animate-pop mt-3 rounded-xl border p-3.5 text-[12.5px] leading-relaxed ${
+        error
+          ? "border-[color-mix(in_srgb,var(--bad)_35%,var(--line))] bg-[color-mix(in_srgb,var(--bad)_7%,var(--panel))]"
+          : "border-[color-mix(in_srgb,var(--brand)_28%,var(--line))] bg-[color-mix(in_srgb,var(--brand)_6%,var(--panel))]"
+      }`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className={`font-semibold ${error ? "text-[var(--bad)]" : "text-[var(--brand)]"}`}>
+            {isArenaPreview
+              ? "Live microphone is restricted inside Arena's embedded preview"
+              : error
+              ? "Microphone access needed"
+              : "Embedded frame detected — microphone access may be restricted"}
+          </p>
+          <p className="mt-1 text-[12px] text-[var(--muted)]">
+            {isArenaPreview
+              ? "Arena's preview frame blocks browser microphone permissions for security. You can practice right now with Manual Transcript Check + Audio Models, or run locally (npm run dev → localhost:3000) / deploy to Vercel for full live voice & pitch recording."
+              : error ||
+                "If microphone access is blocked here, open SpeechCoach directly on localhost:3000 or your deployed URL, or use Manual Transcript Check."}
+          </p>
+        </div>
+        {onManual && (
+          <Btn variant={error ? "primary" : "soft"} onClick={onManual}>
+            Use Manual Practice Check
+          </Btn>
+        )}
+      </div>
     </div>
   );
 }
@@ -297,4 +517,167 @@ export function Timer({ seconds, className = "", onTick }: { seconds: number; cl
 
 export function SectionLabel({ children }: { children: React.ReactNode }) {
   return <p className="section-label">{children}</p>;
+}
+
+// ---------- Score progress bar ----------
+
+export function ScoreBar({ value, max = 100, tone }: { value: number; max?: number; tone?: "good" | "warn" | "bad" | "brand" }) {
+  const pct = Math.min(100, Math.max(0, (value / max) * 100));
+  const resolved = tone ?? (pct >= 80 ? "good" : pct >= 60 ? "warn" : "bad");
+  const color =
+    resolved === "good"
+      ? "var(--good)"
+      : resolved === "warn"
+      ? "var(--warn)"
+      : resolved === "bad"
+      ? "var(--bad)"
+      : "var(--brand)";
+  return (
+    <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--panel2)]">
+      <div
+        className="h-full rounded-full transition-all duration-300"
+        style={{ width: `${pct}%`, background: color }}
+      />
+    </div>
+  );
+}
+
+// ---------- Pitch F0 contour (measured voiced pitch) ----------
+
+export function PitchContour({ samples, height = 64 }: { samples: PitchSample[]; height?: number }) {
+  if (samples.length < 4) {
+    return <p className="text-[12px] text-[var(--muted)]">Not enough voiced pitch frames captured yet.</p>;
+  }
+  const W = 560;
+  const H = height;
+  const minT = samples[0].t;
+  const maxT = Math.max(minT + 1000, samples[samples.length - 1].t);
+  const hzVals = samples.map((s) => s.hz);
+  const lo = Math.max(70, Math.min(...hzVals) - 15);
+  const hi = Math.min(400, Math.max(...hzVals) + 15);
+  const x = (t: number) => 8 + ((t - minT) / (maxT - minT)) * (W - 16);
+  const y = (hz: number) => H - 10 - ((hz - lo) / Math.max(20, hi - lo)) * (H - 22);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height }}>
+      <rect x="0" y="0" width={W} height={H} fill="var(--panel2)" rx="6" />
+      {samples.map((s, i) => (
+        <circle key={i} cx={x(s.t)} cy={y(s.hz)} r="2.1" fill="var(--accent)" opacity={Math.min(1, Math.max(0.45, s.clarity))} />
+      ))}
+      <text x={6} y={12} fontSize="9" fill="var(--muted)">{Math.round(hi)} Hz</text>
+      <text x={6} y={H - 4} fontSize="9" fill="var(--muted)">{Math.round(lo)} Hz</text>
+      <text x={W - 6} y={12} fontSize="9" fill="var(--muted)" textAnchor="end">measured vocal pitch (F0)</text>
+    </svg>
+  );
+}
+
+// ---------- Interactive Monthly Training Calendar ----------
+
+export function TrainingCalendar({ logs, goalMin = 15, compact = false }: { logs: PracticeLog[]; goalMin?: number; compact?: boolean }) {
+  const [monthOffset, setMonthOffset] = useState(0);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  const { year, month, label, cells, byDate, todayStr } = useMemo(() => {
+    const now = new Date();
+    const tStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    const view = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+    const yr = view.getFullYear();
+    const mo = view.getMonth();
+    const monthLabel = view.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const firstDow = view.getDay(); // 0=Sun
+    const daysInMonth = new Date(yr, mo + 1, 0).getDate();
+
+    const map = new Map<string, { seconds: number; sessions: number; notes: string[] }>();
+    for (const l of logs) {
+      const cur = map.get(l.date) ?? { seconds: 0, sessions: 0, notes: [] };
+      cur.seconds += l.seconds;
+      cur.sessions += 1;
+      if (l.note) cur.notes.push(l.note);
+      map.set(l.date, cur);
+    }
+
+    const list: ({ day: number; key: string } | null)[] = [];
+    for (let i = 0; i < firstDow; i++) list.push(null);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = `${yr}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      list.push({ day: d, key });
+    }
+    return { year: yr, month: mo, label: monthLabel, cells: list, byDate: map, todayStr: tStr };
+  }, [logs, monthOffset]);
+
+  void year;
+  void month;
+  const activeDetail = selectedDay ? byDate.get(selectedDay) : null;
+
+  return (
+    <div className="grid gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-display text-[14px] font-semibold">{label}</p>
+        <div className="flex items-center gap-1">
+          <button className="icon-btn" title="Previous month" onClick={() => setMonthOffset((m) => m - 1)}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M9 3L5 7l4 4" /></svg>
+          </button>
+          {monthOffset !== 0 && (
+            <button className="chip chip-muted cursor-pointer" onClick={() => setMonthOffset(0)}>Today</button>
+          )}
+          <button className="icon-btn" title="Next month" onClick={() => setMonthOffset((m) => Math.min(0, m + 1))} disabled={monthOffset >= 0}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M5 3l4 4-4 4" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1 text-center">
+        {["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].map((d) => (
+          <span key={d} className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">{d}</span>
+        ))}
+        {cells.map((cell, idx) => {
+          if (!cell) return <span key={`e-${idx}`} />;
+          const entry = byDate.get(cell.key);
+          const mins = entry ? Math.round(entry.seconds / 60) : 0;
+          const hitGoal = mins >= goalMin;
+          const isToday = cell.key === todayStr;
+          const isSelected = cell.key === selectedDay;
+          return (
+            <button
+              key={cell.key}
+              type="button"
+              onClick={() => setSelectedDay(isSelected ? null : cell.key)}
+              title={entry ? `${cell.key}: ${mins} min (${entry.sessions} session${entry.sessions > 1 ? "s" : ""})` : cell.key}
+              className={`flex flex-col items-center justify-center rounded-lg border text-[11px] tabular-nums transition ${
+                compact ? "h-8" : "h-10"
+              } ${
+                isSelected
+                  ? "border-[var(--accent)] ring-2 ring-[color-mix(in_srgb,var(--accent)_35%,transparent)]"
+                  : isToday
+                  ? "border-[var(--brand)]"
+                  : "border-transparent"
+              } ${
+                hitGoal
+                  ? "bg-[var(--brand)] font-semibold text-white"
+                  : entry
+                  ? "bg-[color-mix(in_srgb,var(--brand)_22%,var(--panel2))] font-semibold text-[var(--ink)]"
+                  : "bg-[var(--panel2)] text-[var(--muted)] hover:border-[var(--line)]"
+              }`}
+            >
+              <span>{cell.day}</span>
+              {!compact && entry && <span className={`text-[9px] leading-none ${hitGoal ? "text-white/85" : "text-[var(--brand)]"}`}>{mins}m</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--muted)]">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[var(--panel2)] border border-[var(--line)]" /> Rest</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[color-mix(in_srgb,var(--brand)_28%,var(--panel2))]" /> Practiced</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-[var(--brand)]" /> Hit {goalMin}m goal</span>
+        </div>
+        {selectedDay && (
+          <span className="text-[var(--ink)]">
+            {selectedDay}: {activeDetail ? `${Math.round(activeDetail.seconds / 60)} min · ${activeDetail.sessions} session(s)` : "No logged practice"}
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
