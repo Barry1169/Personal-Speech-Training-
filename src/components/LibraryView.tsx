@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { BUILTIN_EXERCISES } from "@/lib/program";
 import { CATEGORIES, type Difficulty, type Exercise, fmtDur } from "@/lib/types";
+import { speakSingle } from "@/lib/tts";
 import { Btn, Card, Chip, Field, Input, Modal, Select, Textarea, Timer } from "./ui";
 
 const emptyForm = {
@@ -11,8 +12,8 @@ const emptyForm = {
   durationSec: 120, reps: 3, restSec: 10, instructions: "", materialText: "",
 };
 
-export default function LibraryView() {
-  const { settings, exercises, addExercise, updateExercise, deleteExercise, toggleFavorite } = useStore();
+export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
+  const { settings, setSettings, exercises, addExercise, updateExercise, deleteExercise, toggleFavorite, toast } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("all");
   const [diff, setDiff] = useState("all");
@@ -130,13 +131,42 @@ export default function LibraryView() {
                 <p className="section-label">Material</p>
                 <div className="mt-1.5 grid gap-1.5">
                   {detail.material.map((m, i) => (
-                    <div key={i} className="rounded-lg bg-[var(--panel2)] px-3 py-2 text-[13.5px] leading-relaxed">{m}</div>
+                    <div key={i} className="flex items-start justify-between gap-2 rounded-lg bg-[var(--panel2)] px-3 py-2 text-[13.5px] leading-relaxed">
+                      <span>{m}</span>
+                      <button
+                        type="button"
+                        className="icon-btn shrink-0"
+                        title="Hear model audio"
+                        onClick={() => speakSingle(m, settings.ttsRate, settings.preferredVoice)}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Timer seconds={detail.durationSec} />
+              <Timer resetKey={detail.id} seconds={detail.durationSec} />
+              {nav && (
+                <Btn
+                  variant="primary"
+                  onClick={() => {
+                    setSettings({
+                      task: {
+                        title: detail.name,
+                        mode: detail.category,
+                        script: detail.material.join("\n"),
+                      },
+                    });
+                    toast(`Loaded "${detail.name}" in Recorder`, "info");
+                    setDetail(null);
+                    nav("record");
+                  }}
+                >
+                  Practice in Recorder
+                </Btn>
+              )}
               <Btn variant="soft" onClick={() => toggleFavorite(detail.id)} className="ml-auto">
                 {settings.favorites.includes(detail.id) ? "★ Favorited" : "☆ Favorite"}
               </Btn>

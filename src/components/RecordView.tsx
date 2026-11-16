@@ -2,18 +2,44 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
-import { compareWords, buildAnalysis, paceLabel, volumeLabel, type Comparison } from "@/lib/analytics";
-import type { RecordingAnalysis } from "@/lib/types";
-import { scoreSkills, topWeaknesses, recommendExercises, personalizedRoutine, compareRecordings, type SkillScore } from "@/lib/coach";
-import { BUILTIN_EXERCISES } from "@/lib/program";
-import { dayProgressLabel } from "@/lib/program";
-import { type Recording, type SelfScores, type VolumeSample, EMPTY_SCORES, fmtDur, uid } from "@/lib/types";
-import { Btn, Card, Chip, DotRating, SectionLabel, Textarea, VolumeTimeline, Input } from "./ui";
+import {
+  buildAnalysis,
+  compareWords,
+  computeDetailedAssessment,
+  paceLabel,
+  volumeLabel,
+  type Comparison,
+} from "@/lib/analytics";
+import { detectPitchHz } from "@/lib/pitch";
+import { getRecordingAssessment } from "@/lib/adaptiveCoach";
+import {
+  scoreSkills,
+  topWeaknesses,
+  recommendExercises,
+  personalizedRoutine,
+  compareRecordings,
+  type SkillScore,
+} from "@/lib/coach";
+import { BUILTIN_EXERCISES, dayProgressLabel } from "@/lib/program";
+import {
+  EMPTY_SCORES,
+  fmtDur,
+  uid,
+  type PitchSample,
+  type Recording,
+  type RecordingAnalysis,
+  type SelfScores,
+  type VolumeSample,
+} from "@/lib/types";
+import { speakSingle } from "@/lib/tts";
+import { Btn, Card, Chip, DotRating, Input, MicHelperBanner, PitchContour, SectionLabel, Textarea, VoiceWaveBars, VolumeTimeline } from "./ui";
+import { AnnotatedScript } from "./CoachedText";
+import AssessmentReport from "./AssessmentReport";
 
 type Phase = "idle" | "recording" | "review";
 
 export default function RecordView({ nav }: { nav: (v: string) => void }) {
-  const { settings, setSettings, saveRecording, addLog, toast, recordings, exercises, getBlob } = useStore();
+  const { settings, setSettings, saveRecording, addLog, toast, recordings, exercises } = useStore();
 
   const task = settings.task;
   const [script, setScript] = useState(task?.script ?? "");
@@ -28,10 +54,13 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [blob, setBlob] = useState<Blob | null>(null);
   const [tl, setTl] = useState<VolumeSample[]>([]);
+  const [pitches, setPitches] = useState<PitchSample[]>([]);
   const [self, setSelf] = useState<SelfScores>(EMPTY_SCORES);
-  const [srSupported, setSrSupported] = useState<boolean | null>(null);
   const [micError, setMicError] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [previousAttemptScore, setPreviousAttemptScore] = useState<number | null>(null);
+  const [targetId, setTargetId] = useState<string | null>(null);
 
   const srRef = useRef<any>(null);
   const mrRef = useRef<MediaRecorder | null>(null);
@@ -43,36 +72,122 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
   const finals = useRef<string[]>([]);
   const recOn = useRef(false);
   const disposed = useRef(false);
+  const tlRef = useRef<VolumeSample[]>([]);
+  const pitchRef = useRef<PitchSample[]>([]);
+
+  const srSupported = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+    return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
+  }, []);
 
   useEffect(() => {
-    const w = window as any;
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-    setSrSupported(!!SR);
     disposed.current = false;
     return () => {
       disposed.current = true;
       recOn.current = false;
-      try { srRef.current?.stop(); } catch { /* noop */ }
+      try {
+        srRef.current?.stop();
+      } catch {
+        /* noop */
+      }
       try {
         const mr = mrRef.current;
         if (mr) {
-          mr.onstop = null; // do not finish()/setState after unmount
+          mr.onstop = null;
           if (mr.state !== "inactive") mr.stop();
         }
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
       if (volIv.current) clearInterval(volIv.current);
       if (elapsedIv.current) clearInterval(elapsedIv.current);
       audioCtxRef.current?.close().catch(() => undefined);
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [blobUrl]);
+
   const stopAll = () => {
     recOn.current = false;
-    try { srRef.current?.stop(); } catch { /* noop */ }
-    if (volIv.current) { clearInterval(volIv.current); volIv.current = null; }
-    if (elapsedIv.current) { clearInterval(elapsedIv.current); elapsedIv.current = null; }
-    try { audioCtxRef.current?.close(); } catch { /* noop */ }
+    try {
+      srRef.current?.stop();
+    } catch {
+      /* noop */
+    }
+    if (volIv.current) {
+      clearInterval(volIv.current);
+      volIv.current = null;
+    }
+    if (elapsedIv.current) {
+      clearInterval(elapsedIv.current);
+      elapsedIv.current = null;
+    }
+    try {
+      audioCtxRef.current?.close();
+    } catch {
+      /* noop */
+    }
     audioCtxRef.current = null;
+  };
+
+  const finish = (audio: Blob | null) => {
+    if (disposed.current) return;
+    const durationSec = Math.max(1, Math.round((Date.now() - startTs.current) / 1000));
+    stopAll();
+    const transcript = finals.current.join(" ").replace(/\s+/g, " ").trim();
+    const cmp = script.trim() ? compareWords(script, transcript) : null;
+    const samples = [...tlRef.current];
+    const pSamples = [...pitchRef.current];
+    setTl(samples);
+    setPitches(pSamples);
+    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples);
+    const targetWpm = task?.targetWpm ?? 130;
+    const assessment = computeDetailedAssessment({
+      analysis,
+      self: null,
+      script: script.trim() || null,
+      transcript,
+      comparison: cmp,
+      durationSec,
+      targetWpm,
+    });
+    const r: Recording = {
+      id: uid(),
+      createdAt: Date.now(),
+      title: title.trim() || `Session — ${dayProgressLabel(settings.currentDay)}`,
+      mode: task?.mode ?? "manual",
+      scriptText: script.trim() || null,
+      transcript,
+      durationSec,
+      analysis,
+      self: null,
+      assessment,
+      exerciseId: task?.exerciseId ?? null,
+      targetWpm,
+      hasAudio: !!audio && audio.size > 0,
+      mimeType: audio?.type ?? "audio/webm",
+      dayLabel: dayProgressLabel(settings.currentDay),
+    };
+    setRec(r);
+    setBlob(audio);
+    setSaved(false);
+    if (audio && audio.size > 0) {
+      const u = URL.createObjectURL(audio);
+      setBlobUrl(u);
+    } else {
+      setBlobUrl(null);
+      setAudioError("No audio was captured (recording was very short or the browser blocked it).");
+    }
+    if (!transcript) {
+      setUsingManual(true);
+      toast("No transcript captured — type what you said, or replay and listen.", "info");
+    }
+    setPhase("review");
   };
 
   const start = async () => {
@@ -80,11 +195,17 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     setAudioError(null);
     finals.current = [];
     chunks.current = [];
+    tlRef.current = [];
+    pitchRef.current = [];
+    setTl([]);
+    setPitches([]);
     setLive("");
     setManual("");
     setElapsed(0);
+    setSaved(false);
     setPhase("recording");
     setSelf(EMPTY_SCORES);
+
     try {
       if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
         throw new DOMException("Unsupported", "NotSupportedError");
@@ -93,7 +214,9 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
       const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
       mrRef.current = mr;
-      mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.current.push(e.data); };
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.current.push(e.data);
+      };
       mr.onstop = () => {
         const b = new Blob(chunks.current, { type: mr.mimeType || "audio/webm" });
         stream.getTracks().forEach((t) => t.stop());
@@ -101,30 +224,36 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       };
       mr.start(250);
 
-      // volume sampler
+      // Volume + Real F0 Pitch sampler
       try {
-        const AC = window.AudioContext || (window as any).webkitAudioContext;
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
         const ctx = new AC();
         if (ctx.state === "suspended") void ctx.resume();
         audioCtxRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
         const an = ctx.createAnalyser();
-        an.fftSize = 1024;
+        an.fftSize = 2048;
         src.connect(an);
         const buf = new Float32Array(an.fftSize);
-        const samples: VolumeSample[] = [];
-        setTl([]);
         volIv.current = setInterval(() => {
           an.getFloatTimeDomainData(buf);
           let sum = 0;
           for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
           const rms = Math.sqrt(sum / buf.length);
-          samples.push({ t: Date.now() - startTs.current, r: rms });
-          if (samples.length % 5 === 0) setTl([...samples]);
+          const tNow = Date.now() - startTs.current;
+          tlRef.current.push({ t: tNow, r: rms });
+          const f0 = detectPitchHz(buf, ctx.sampleRate);
+          if (f0) pitchRef.current.push({ t: tNow, hz: f0.hz, clarity: f0.clarity });
+          if (tlRef.current.length % 5 === 0) {
+            setTl([...tlRef.current]);
+            setPitches([...pitchRef.current]);
+          }
         }, 100);
-      } catch { /* volume sampling unavailable */ }
+      } catch {
+        /* volume/pitch sampling unavailable */
+      }
 
-      // speech-to-text
+      // Speech-to-text
       const w = window as any;
       const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
       if (SR) {
@@ -144,10 +273,22 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
           setLive([...finals.current].join(" ") + " " + interim);
         };
         r.onend = () => {
-          if (recOn.current) { try { r.start(); } catch { /* noop */ } }
+          if (recOn.current) {
+            try {
+              r.start();
+            } catch {
+              /* noop */
+            }
+          }
         };
-        r.onerror = () => { /* keep going */ };
-        try { r.start(); } catch { /* noop */ }
+        r.onerror = () => {
+          /* keep going */
+        };
+        try {
+          r.start();
+        } catch {
+          /* noop */
+        }
       }
       startTs.current = Date.now();
       recOn.current = true;
@@ -157,59 +298,50 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       stopAll();
       const name = e instanceof Error ? e.name : "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
-        setMicError("Microphone permission was denied. Click the microphone icon in the browser address bar, allow access, then try again.");
+        setMicError("Microphone permission was denied. Allow microphone access in your browser address bar, or run SpeechCoach locally / on your deployed site.");
+        toast("Microphone blocked in this frame — use Manual Check here, or run locally for live mic.", "err");
       } else if (name === "NotFoundError" || name === "DevicesNotFound") {
-        setMicError("No microphone was found on this device.");
+        setMicError("No microphone was found on this device. You can still use Manual Transcript Practice below.");
+        toast("No microphone found — Manual Transcript Practice is available below.", "err");
       } else {
-        setMicError(`Recording could not start (${name || "unsupported in this browser"}). Chrome or Edge on desktop are recommended.`);
+        setMicError(`Recording could not start (${name || "unsupported in this browser"}). Run on localhost:3000 or your deployed URL in Chrome/Edge.`);
+        toast("Recording unavailable here — use Manual Transcript Check below.", "err");
       }
     }
   };
 
-  const finish = (audio: Blob | null) => {
-    if (disposed.current) return;
-    const durationSec = Math.max(1, Math.round((Date.now() - startTs.current) / 1000));
-    stopAll();
-    const transcript = finals.current.join(" ").replace(/\s+/g, " ").trim();
-    const cmp = script.trim() ? compareWords(script, transcript) : null;
-    const samples = tlRef.current;
-    const analysis = buildAnalysis(transcript, durationSec, samples, cmp);
-    const r: Recording = {
-      id: uid(),
-      createdAt: Date.now(),
-      title: title.trim() || `Session — ${dayProgressLabel(settings.currentDay)}`,
-      mode: task?.mode ?? "manual",
-      scriptText: script.trim() || null,
-      transcript,
-      durationSec,
-      analysis,
-      self: null,
-      hasAudio: !!audio && audio.size > 0,
-      mimeType: audio?.type ?? "audio/webm",
-      dayLabel: dayProgressLabel(settings.currentDay),
-    };
-    setRec(r);
-    setBlob(audio);
-    if (audio && audio.size > 0) {
-      const u = URL.createObjectURL(audio);
-      setBlobUrl(u);
-    } else {
-      setAudioError("No audio was captured (recording was very short or the browser blocked it).");
-    }
-    if (!transcript) {
-      setUsingManual(true);
-      toast("No transcript captured — type what you said, or replay and listen.", "info");
-    }
-    setPhase("review");
-  };
-
-  // keep latest samples for finish()
-  const tlRef = useRef<VolumeSample[]>([]);
-  tlRef.current = tl;
-
   const stop = () => {
     if (mrRef.current && mrRef.current.state !== "inactive") mrRef.current.stop();
     else finish(null);
+  };
+
+  const openManualSession = () => {
+    const durationSec = Math.max(20, Math.round((Math.max(30, script.split(/\s+/).length) / 125) * 60));
+    const blank: Recording = {
+      id: uid(),
+      createdAt: Date.now(),
+      title: title.trim() || `Manual Check — ${dayProgressLabel(settings.currentDay)}`,
+      mode: task?.mode ?? "manual",
+      scriptText: script.trim() || null,
+      transcript: "",
+      durationSec,
+      analysis: buildAnalysis("", durationSec, [], null),
+      self: null,
+      exerciseId: task?.exerciseId ?? null,
+      targetWpm: task?.targetWpm ?? 130,
+      hasAudio: false,
+      mimeType: "audio/webm",
+      dayLabel: dayProgressLabel(settings.currentDay),
+    };
+    setRec(blank);
+    setBlob(null);
+    setBlobUrl(null);
+    setTl([]);
+    setPitches([]);
+    setManual(script.trim());
+    setUsingManual(true);
+    setSaved(false);
+    setPhase("review");
   };
 
   const discard = () => {
@@ -217,41 +349,79 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     setBlobUrl(null);
     setBlob(null);
     setRec(null);
+    setSaved(false);
     setPhase("idle");
   };
 
-  const save = async () => {
-    if (!rec) return;
-    const full: Recording = {
-      ...rec,
-      transcript: effectiveTranscript,
-      analysis: liveAnalysis ?? rec.analysis,
-      self: Object.values(self).some((v) => v > 0) ? self : null,
-    };
-    await saveRecording(full, blob);
-    addLog({ seconds: rec.durationSec, mode: full.mode, completed: 0, scores: full.self, note: full.title });
-    setSettings({ task: null });
-    toast(`Recording saved (${fmtDur(rec.durationSec)})`);
-    setRec({ ...full });
-    // keep review visible; mark saved
-    setSaved(true);
-  };
+  const effectiveTranscript = useMemo(
+    () => (rec ? (usingManual ? manual.trim() : rec.transcript) : ""),
+    [rec, usingManual, manual]
+  );
 
-  const [saved, setSaved] = useState(false);
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const openHistory = (id: string) => setTargetId(id);
-
-  // Effective transcript = manual text if the user switched to manual, else STT text.
-  // Comparison + analysis recompute live so corrections re-score everything below.
-  const effectiveTranscript = rec ? (usingManual ? manual.trim() : rec.transcript) : "";
   const liveCmp = useMemo<Comparison | null>(() => {
     if (!rec?.scriptText) return null;
     return compareWords(rec.scriptText, effectiveTranscript);
   }, [rec, effectiveTranscript]);
+
   const liveAnalysis = useMemo<RecordingAnalysis | null>(() => {
     if (!rec) return null;
-    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp);
-  }, [rec, effectiveTranscript, tl, liveCmp]);
+    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp, pitches);
+  }, [rec, effectiveTranscript, tl, liveCmp, pitches]);
+
+  const hasAnySelf = useMemo(
+    () => Object.values(self).some((v) => (v ?? 0) > 0),
+    [self]
+  );
+
+  const liveAssessment = useMemo(() => {
+    if (!rec || !liveAnalysis) return null;
+    return computeDetailedAssessment({
+      analysis: liveAnalysis,
+      self: hasAnySelf ? self : null,
+      script: rec.scriptText,
+      transcript: effectiveTranscript,
+      comparison: liveCmp,
+      durationSec: rec.durationSec,
+      targetWpm: rec.targetWpm ?? 130,
+    });
+  }, [rec, liveAnalysis, hasAnySelf, self, effectiveTranscript, liveCmp]);
+
+  const save = async () => {
+    if (!rec || !liveAnalysis || !liveAssessment) return;
+    const full: Recording = {
+      ...rec,
+      transcript: effectiveTranscript,
+      analysis: liveAnalysis,
+      self: hasAnySelf ? self : null,
+      assessment: liveAssessment,
+    };
+    await saveRecording(full, blob);
+    addLog({
+      seconds: rec.durationSec,
+      mode: full.mode,
+      completed: 1,
+      scores: full.self,
+      overallScore: liveAssessment.overallScore,
+      note: full.title,
+    });
+    setSettings({ task: null });
+    toast(`Recording saved — ${liveAssessment.overallScore}/100 (${fmtDur(rec.durationSec)})`);
+    setRec(full);
+    setSaved(true);
+  };
+
+  const retryFullExercise = () => {
+    if (liveAssessment) setPreviousAttemptScore(liveAssessment.overallScore);
+    void start();
+  };
+
+  const practiceSentence = (sentTitle: string, sentText: string) => {
+    if (liveAssessment) setPreviousAttemptScore(liveAssessment.overallScore);
+    setTitle(sentTitle);
+    setScript(sentText);
+    setPhase("idle");
+    toast(`Loaded "${sentTitle}" — press Start recording to practice it cleanly.`, "info");
+  };
 
   const download = () => {
     if (!blob) return;
@@ -265,8 +435,8 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
 
   const scores: SkillScore[] = useMemo(() => {
     if (!rec || !liveAnalysis) return [];
-    return scoreSkills({ analysis: liveAnalysis, self: Object.values(self).some((v) => v > 0) ? self : null });
-  }, [rec, liveAnalysis, self]);
+    return scoreSkills({ analysis: liveAnalysis, self: hasAnySelf ? self : null });
+  }, [rec, liveAnalysis, hasAnySelf, self]);
 
   const weak = useMemo(() => topWeaknesses(scores, 3), [scores]);
 
@@ -282,163 +452,340 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     const prev = [...recordings].sort((a, b) => a.createdAt - b.createdAt)[0];
     if (prev.id === rec.id) return null;
     return {
-      label: "vs your earliest recording",
-      lines: compareRecordings(prev, { ...rec, transcript: effectiveTranscript, analysis: liveAnalysis, self: Object.values(self).some((v) => v > 0) ? self : null }),
+      label: "vs your earliest recording (Day 1 baseline)",
+      lines: compareRecordings(prev, {
+        ...rec,
+        transcript: effectiveTranscript,
+        analysis: liveAnalysis,
+        self: hasAnySelf ? self : null,
+      }),
     };
-  }, [rec, liveAnalysis, effectiveTranscript, recordings, self]);
+  }, [rec, liveAnalysis, effectiveTranscript, recordings, hasAnySelf, self]);
 
   const pace = liveAnalysis ? paceLabel(liveAnalysis.wpm) : null;
   const liveWords = live ? live.trim().split(/\s+/).length : 0;
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
+    <div className="grid gap-5 xl:grid-cols-[1fr_350px]">
       <div className="grid content-start gap-5">
         {/* Task setup / capture */}
-        <Card title={phase === "recording" ? "Recording…" : "Record & assess"}
-          sub="Speak against a script for word-level comparison, or free-talk for pure stats. Everything is saved locally.">
+        <Card
+          title={phase === "recording" ? "Recording…" : "Record & assess"}
+          sub="Speak against a script for word & sentence comparison, or free-talk for pure acoustic & fluency scoring."
+        >
           {phase !== "recording" && (
             <div className="grid gap-3">
-              <div className="grid gap-3 sm:grid-cols-[220px_1fr]">
+              {/* Show coaching cues banner if task came from Coached Materials */}
+              {task?.annotatedText && (
+                <div className="rounded-xl border border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,var(--panel2))] p-3.5">
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <Chip tone="brand">Active Coach Cues · target ~{task.targetWpm ?? 130} WPM</Chip>
+                    {task.script && (
+                      <Btn variant="soft" onClick={() => speakSingle(task.script, settings.ttsRate, settings.preferredVoice)}>
+                        Hear model audio
+                      </Btn>
+                    )}
+                  </div>
+                  <AnnotatedScript text={task.annotatedText} showCues />
+                  {task.coaching && (
+                    <p className="mt-2 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
+                      <strong className="text-[var(--ink)]">Delivery tip: </strong>
+                      {task.coaching.howToSpeak}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="grid gap-3 sm:grid-cols-[240px_1fr]">
                 <label className="block">
                   <span className="lbl">Title</span>
-                  <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={`Check-in — ${dayProgressLabel(settings.currentDay)}`} />
+                  <Input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder={`Check-in — ${dayProgressLabel(settings.currentDay)}`}
+                  />
                 </label>
               </div>
               <label className="block">
-                <span className="lbl">Script to compare against <span className="normal-case text-[var(--muted)]">(optional)</span></span>
-                <Textarea rows={4} value={script} onChange={(e) => setScript(e.target.value)} placeholder="Paste a passage, your interview answers, or any text you want to read. Leave empty for free speaking." />
+                <span className="lbl">
+                  Script to compare against <span className="normal-case text-[var(--muted)]">(optional)</span>
+                </span>
+                <Textarea
+                  rows={4}
+                  value={script}
+                  onChange={(e) => setScript(e.target.value)}
+                  placeholder="Paste a passage, your interview answers, or any text you want to read. Leave empty for free speaking."
+                />
               </label>
               <div className="flex flex-wrap items-center gap-2">
                 <Btn onClick={start}>
-                  <svg className="mr-1.5" width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="4.5" r="3" /><path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" /></svg>
+                  <svg className="mr-1" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                    <circle cx="6" cy="4.5" r="3" />
+                    <path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" />
+                  </svg>
                   Start recording
                 </Btn>
+                <Btn variant="ghost" onClick={openManualSession}>
+                  Manual transcript check
+                </Btn>
                 {task && (
-                  <Btn variant="ghost" onClick={() => { setSettings({ task: null }); setScript(""); setTitle(""); }}>Clear imported task</Btn>
+                  <Btn
+                    variant="ghost"
+                    onClick={() => {
+                      setSettings({ task: null });
+                      setScript("");
+                      setTitle("");
+                    }}
+                  >
+                    Clear imported task
+                  </Btn>
                 )}
                 <span className="ml-auto text-[11.5px] text-[var(--muted)]">
-                  {srSupported === null ? "…" : srSupported
-                    ? "Speech-to-text: available (live transcript)"
-                    : "Speech-to-text: not supported in this browser — use the manual transcript after recording"}
+                  {srSupported === null
+                    ? "…"
+                    : srSupported
+                    ? "Live audio + F0 pitch + speech-to-text available"
+                    : "Audio + F0 pitch available (manual transcript supported)"}
                 </span>
               </div>
-              {micError && <p className="rounded-lg bg-[color-mix(in_srgb,var(--bad)_12%,transparent)] px-3 py-2 text-[12.5px] text-[var(--bad)]">{micError}</p>}
+              <MicHelperBanner error={micError} onManual={openManualSession} />
             </div>
           )}
 
           {phase === "recording" && (
-            <div className="grid gap-4">
-              <div className="flex items-center gap-3">
+            <div className="animate-pop grid gap-4">
+              <div className="flex flex-wrap items-center gap-3">
                 <span className="rec-dot" />
                 <div>
                   <p className="font-display text-[17px] font-semibold tabular-nums">{fmtDur(elapsed)}</p>
-                  <p className="text-[11.5px] text-[var(--muted)]">{liveWords} words transcribed so far</p>
+                  <p className="text-[11.5px] text-[var(--muted)]">
+                    {liveWords} words transcribed · {pitches.length} voiced pitch frames captured
+                  </p>
                 </div>
-                <Btn variant="danger" onClick={stop} className="ml-auto">Stop</Btn>
+                <VoiceWaveBars level={tl[tl.length - 1]?.r ?? 0.03} />
+                <Btn variant="danger" onClick={stop} className="ml-auto">
+                  Stop & Score
+                </Btn>
               </div>
+              {task?.annotatedText && (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-3.5">
+                  <AnnotatedScript text={task.annotatedText} showCues />
+                </div>
+              )}
               <VolumeTimeline tl={tl} />
               <div className="rounded-lg bg-[var(--panel2)] p-3 text-[13.5px] leading-relaxed">
-                {usingManual ? "Listening… (no live transcript in this browser)" : live ? <span className="live-transcript">{live} <span className="caret">▍</span></span> : <span className="text-[var(--muted)]">Listening… start talking.</span>}
+                {usingManual ? (
+                  "Listening… (no live transcript in this browser)"
+                ) : live ? (
+                  <span className="live-transcript">
+                    {live} <span className="caret">▍</span>
+                  </span>
+                ) : (
+                  <span className="text-[var(--muted)]">Listening… start talking clearly.</span>
+                )}
               </div>
             </div>
           )}
         </Card>
 
         {/* Review */}
-        {phase === "review" && rec && (
+        {phase === "review" && rec && liveAnalysis && liveAssessment && (
           <>
-            <Card title={rec.title} sub={`${rec.dayLabel} · ${fmtDur(rec.durationSec)}`}
-              right={saved ? <Chip tone="good">Saved to history</Chip> : <Chip tone="warn">Not saved yet</Chip>}>
+            {/* Explainable 100-Point Assessment Report */}
+            <AssessmentReport
+              assessment={liveAssessment}
+              analysis={liveAnalysis}
+              previousScore={previousAttemptScore}
+              onRetryExercise={retryFullExercise}
+              onPracticeText={practiceSentence}
+            />
+
+            {/* Replay + Transcript + Script Diff */}
+            <Card
+              title={rec.title}
+              sub={`${rec.dayLabel} · ${fmtDur(rec.durationSec)}`}
+              right={saved ? <Chip tone="good">Saved to history</Chip> : <Chip tone="warn">Not saved yet</Chip>}
+            >
               <div className="grid gap-4">
                 {blobUrl ? (
                   <div>
-                    <SectionLabel>Replay</SectionLabel>
+                    <SectionLabel>Replay your take</SectionLabel>
                     <audio controls src={blobUrl} className="mt-1 w-full" />
                   </div>
                 ) : (
-                  <p className="text-[12.5px] text-[var(--bad)]">{audioError ?? "No audio available."}</p>
+                  <p className="text-[12.5px] text-[var(--muted)]">{audioError ?? "Manual text check (no audio blob)."}</p>
                 )}
 
                 <div>
                   <div className="flex items-center justify-between">
-                    <SectionLabel>Transcript {srSupported && !usingManual && <span className="normal-case text-[var(--muted)]">(speech-to-text — editable)</span>}</SectionLabel>
-                    {!usingManual && <button className="chip chip-muted cursor-pointer hover:chip-hover" onClick={() => { setManual(live); setUsingManual(true); }}>Switch to manual</button>}
+                    <SectionLabel>
+                      Transcript {srSupported && !usingManual && <span className="normal-case text-[var(--muted)]">(speech-to-text — editable)</span>}
+                    </SectionLabel>
+                    <button
+                      className="chip chip-muted cursor-pointer hover:chip-hover"
+                      onClick={() => {
+                        if (!usingManual) setManual(live || rec.transcript);
+                        setUsingManual((v) => !v);
+                      }}
+                    >
+                      {usingManual ? "Use auto transcript" : "Edit / switch to manual"}
+                    </button>
                   </div>
                   {usingManual ? (
-                    <Textarea rows={5} className="mt-1.5" value={manual} onChange={(e) => setManual(e.target.value)} placeholder="Type what you said (or what you clearly heard yourself saying). This powers the comparison below." />
+                    <Textarea
+                      rows={4}
+                      className="mt-1.5"
+                      value={manual}
+                      onChange={(e) => setManual(e.target.value)}
+                      placeholder="Type or correct what you said. Every score and word diff updates immediately."
+                    />
                   ) : (
-                    <div className="mt-1.5 whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13.5px] leading-relaxed">{rec.transcript || "No transcript captured."}</div>
+                    <div className="mt-1.5 whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13.5px] leading-relaxed">
+                      {rec.transcript || "No transcript captured."}
+                    </div>
                   )}
-                  {usingManual && <p className="mt-1 text-[11.5px] text-[var(--muted)]">Updating the manual text re-runs the comparison and coach feedback below.</p>}
                 </div>
 
                 {rec.scriptText && (
                   <div>
-                    <SectionLabel>Comparison with the script</SectionLabel>
-                    {liveCmp && liveAnalysis?.coverage != null && (
+                    <SectionLabel>Word-by-word comparison with the script</SectionLabel>
+                    {liveCmp && liveAnalysis.coverage != null && (
                       <p className="mt-1 text-[12.5px] text-[var(--muted)]">
-                        <Chip tone={liveAnalysis.coverage >= 90 ? "good" : liveAnalysis.coverage >= 70 ? "warn" : "bad"}>{liveAnalysis.coverage}% matched</Chip>{" "}
+                        <Chip tone={liveAnalysis.coverage >= 90 ? "good" : liveAnalysis.coverage >= 70 ? "warn" : "bad"}>
+                          {liveAnalysis.coverage}% matched
+                        </Chip>{" "}
                         <span className="text-[var(--bad)]">{liveCmp.missingCount} missing</span> ·{" "}
                         <span className="text-[var(--accent)]">{liveCmp.extraCount} extra</span>
                       </p>
                     )}
                     <div className="mt-1.5 rounded-lg bg-[var(--panel2)] p-3 text-[13.5px] leading-[1.9]">
                       {liveCmp?.tokens.map((t, i) => (
-                        <span key={i} className={
-                          t.status === "missing" ? "diff-missing" :
-                          t.status === "extra" ? "diff-extra" : ""
-                        }>{t.word} </span>
+                        <span
+                          key={i}
+                          className={
+                            t.status === "missing" ? "diff-missing" : t.status === "extra" ? "diff-extra" : ""
+                          }
+                        >
+                          {t.word}{" "}
+                        </span>
                       ))}
                     </div>
                     <p className="mt-2 text-[11.5px] leading-relaxed text-[var(--muted)]">
-                      <strong className="text-[var(--ink)]">Honesty note:</strong> word-matching compares <em>what the speech-to-text engine heard</em>, not how you pronounced each word. A mis-transcription can show a word as “missing” even when you said it clearly — and vice versa. Use it as a map of gaps, not a pronunciation score.
+                      <strong className="text-[var(--ink)]">Honesty note:</strong> word-matching compares{" "}
+                      <em>what the speech-to-text engine heard</em>, not clinical pronunciation accuracy. Use it as a map of gaps, and verify pronunciation by listening to your replay.
                     </p>
                   </div>
                 )}
               </div>
             </Card>
 
-            <Card title="Voice analysis" sub="Computed locally from your audio and transcript.">
+            {/* Acoustic Signal Visualizers */}
+            <Card title="Measured acoustic telemetry" sub="Computed locally from your PCM audio buffer — never estimated or random.">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <div className="stat"><span className="stat-label">Speaking speed</span><span className="stat-value text-[15px]">{pace?.label ?? "n/a"}</span></div>
-                <div className="stat"><span className="stat-label">Filler words</span><span className="stat-value">{liveAnalysis?.fillerTotal ?? 0}</span>
-                  <span className="stat-sub">{Object.entries(liveAnalysis?.fillers ?? {}).map(([k, v]) => `${k}×${v}`).join(", ") || "none detected"}</span></div>
-                <div className="stat"><span className="stat-label">Long pauses</span><span className="stat-value">{liveAnalysis?.longPauses ?? 0}</span><span className="stat-sub">silence &gt; 1.2s (from your audio)</span></div>
-                <div className="stat"><span className="stat-label">Volume</span><span className="stat-value text-[15px]">{volumeLabel(liveAnalysis?.volume?.cv ?? null)}</span>
-                  <span className="stat-sub">{liveAnalysis?.volume ? `index ${liveAnalysis.volume.cv.toFixed(2)} · spoke ${Math.round(liveAnalysis.volume.activeRatio * 100)}% of time` : "no data"}</span></div>
+                <div className="stat">
+                  <span className="stat-label">Speaking speed</span>
+                  <span className="stat-value text-[15px]">{pace?.label ?? "n/a"}</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Filler words</span>
+                  <span className="stat-value">{liveAnalysis.fillerTotal}</span>
+                  <span className="stat-sub">
+                    {Object.entries(liveAnalysis.fillers)
+                      .map(([k, v]) => `${k}×${v}`)
+                      .join(", ") || "none detected"}
+                  </span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Pause cadence</span>
+                  <span className="stat-value">
+                    {liveAnalysis.pauses
+                      ? `${liveAnalysis.pauses.naturalCount + liveAnalysis.pauses.deliberateCount} / ${liveAnalysis.pauses.longCount}`
+                      : liveAnalysis.longPauses}
+                  </span>
+                  <span className="stat-sub">clean phrasing / &gt;1.5s long</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Volume &amp; Pitch</span>
+                  <span className="stat-value text-[15px]">{volumeLabel(liveAnalysis.volume?.cv ?? null)}</span>
+                  <span className="stat-sub">
+                    {liveAnalysis.pitch
+                      ? `${liveAnalysis.pitch.medianHz} Hz · ${liveAnalysis.pitch.semitoneRange.toFixed(1)} st span`
+                      : liveAnalysis.volume
+                      ? `CV ${liveAnalysis.volume.cv.toFixed(2)}`
+                      : "no audio"}
+                  </span>
+                </div>
               </div>
-              {(liveAnalysis?.repeats.length ?? 0) > 0 && (
-                <p className="mt-3 text-[12.5px] text-[var(--muted)]">Repeated words: <span className="text-[var(--ink)]">{liveAnalysis!.repeats.slice(0, 8).join(", ")}</span>{liveAnalysis!.repeats.length > 8 ? ` +${liveAnalysis!.repeats.length - 8} more` : ""}</p>
+              {liveAnalysis.repeats.length > 0 && (
+                <p className="mt-3 text-[12.5px] text-[var(--muted)]">
+                  Repeated words:{" "}
+                  <span className="text-[var(--ink)]">{liveAnalysis.repeats.slice(0, 8).join(", ")}</span>
+                </p>
               )}
-              <div className="mt-4">
-                <SectionLabel>Volume timeline</SectionLabel>
-                <div className="mt-1"><VolumeTimeline tl={tl} height={72} /></div>
-              </div>
-            </Card>
-
-            <Card title="AI speech coach" sub="Rule-based feedback from your local analysis — no data leaves this device.">
-              <div className="grid gap-4">
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
                 <div>
-                  <SectionLabel>Your three biggest weaknesses in this take</SectionLabel>
-                  <div className="mt-2 grid gap-2">
-                    {weak.map((w, i) => (
-                      <div key={w.key} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3">
-                        <div className="flex items-center gap-2">
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--bad)] text-[11px] font-semibold text-white">{i + 1}</span>
-                          <span className="text-[13.5px] font-semibold">{w.label}</span>
-                          <span className="ml-auto text-[12px] tabular-nums text-[var(--muted)]">{w.score.toFixed(1)}/5</span>
-                        </div>
-                        <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--muted)]">{w.note}</p>
-                      </div>
-                    ))}
+                  <SectionLabel>Volume timeline</SectionLabel>
+                  <div className="mt-1">
+                    <VolumeTimeline tl={tl} height={68} />
                   </div>
                 </div>
                 <div>
-                  <SectionLabel>Recommended exercises</SectionLabel>
+                  <SectionLabel>Vocal pitch contour (F0)</SectionLabel>
+                  <div className="mt-1">
+                    <PitchContour samples={pitches} height={68} />
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            {/* Self-Assessment & Save */}
+            <Card
+              title="Listening self-assessment & save"
+              sub="Replay your audio and rate honestly 1–5. Pronunciation requires your ear so we never fake phoneme scores."
+            >
+              <div className="grid gap-3 sm:grid-cols-2">
+                <DotRating label="Pronunciation" value={self.pronunciation} onChange={(v) => setSelf((s) => ({ ...s, pronunciation: v }))} />
+                <DotRating label="Clarity" value={self.clarity} onChange={(v) => setSelf((s) => ({ ...s, clarity: v }))} />
+                <DotRating label="Fluency" value={self.fluency} onChange={(v) => setSelf((s) => ({ ...s, fluency: v }))} />
+                <DotRating label="Pacing" value={self.pacing} onChange={(v) => setSelf((s) => ({ ...s, pacing: v }))} />
+                <DotRating label="Vocal control" value={self.vocalControl} onChange={(v) => setSelf((s) => ({ ...s, vocalControl: v }))} />
+                <DotRating label="Expression" value={self.expression ?? 0} onChange={(v) => setSelf((s) => ({ ...s, expression: v }))} />
+                <DotRating label="Breathing" value={self.breathing ?? 0} onChange={(v) => setSelf((s) => ({ ...s, breathing: v }))} />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Btn onClick={() => void save()}>{saved ? "Update saved recording" : "Save recording"}</Btn>
+                <Btn variant="soft" onClick={retryFullExercise}>
+                  Record another take
+                </Btn>
+                <Btn variant="soft" onClick={download} disabled={!blob}>
+                  Download audio
+                </Btn>
+                <Btn variant="ghost" onClick={discard}>
+                  Discard
+                </Btn>
+                {saved && (
+                  <Btn variant="soft" onClick={() => nav("progress")}>
+                    See progress →
+                  </Btn>
+                )}
+              </div>
+            </Card>
+
+            {/* Rule-based Coaching Recommendations & Routine (preserved) */}
+            <Card title="Recommended follow-up drills" sub="Deterministic coaching plan based on this recording.">
+              <div className="grid gap-4">
+                <div>
+                  <SectionLabel>Targeted library exercises</SectionLabel>
                   <div className="mt-2 grid gap-1.5">
                     {recs.map((r, i) => (
-                      <button key={i} className="flex items-start gap-2 rounded-lg bg-[var(--panel2)] px-3 py-2 text-left hover:chip-hover" onClick={() => nav("library")}>
-                        <svg className="mt-0.5 shrink-0 text-[var(--brand)]" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M2 3.5l2 2 4-4M2 9.5l2 2 4-4" /><path d="M10 4h2M10 10h2" /></svg>
+                      <button
+                        key={i}
+                        className="flex items-start gap-2 rounded-lg bg-[var(--panel2)] px-3 py-2 text-left hover:chip-hover"
+                        onClick={() => nav("library")}
+                      >
+                        <svg className="mt-0.5 shrink-0 text-[var(--brand)]" width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.6">
+                          <path d="M2 3.5l2 2 4-4M2 9.5l2 2 4-4" />
+                        </svg>
                         <span>
                           <span className="text-[13px] font-medium">{r.title}</span>
                           <span className="block text-[11.5px] text-[var(--muted)]">{r.reason}</span>
@@ -448,12 +795,14 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
                   </div>
                 </div>
                 <div>
-                  <SectionLabel>Personalized routine for today</SectionLabel>
+                  <SectionLabel>Suggested mini-routine</SectionLabel>
                   <ol className="mt-2 grid gap-1.5">
                     {routine.map((s, i) => (
                       <li key={i} className="flex items-baseline gap-2 text-[13px] leading-relaxed">
                         <span className="tabular-nums text-[var(--muted)]">{i + 1}.</span>
-                        <span>{s.step} <span className="text-[11.5px] text-[var(--muted)]">~{s.minutes} min</span></span>
+                        <span>
+                          {s.step} <span className="text-[11.5px] text-[var(--muted)]">~{s.minutes} min</span>
+                        </span>
                       </li>
                     ))}
                   </ol>
@@ -462,128 +811,136 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
                   <div>
                     <SectionLabel>{vsPrevious.label}</SectionLabel>
                     <ul className="mt-2 grid gap-1">
-                      {vsPrevious.lines.map((l, i) => <li key={i} className="text-[12.5px] text-[var(--muted)]">{l}</li>)}
+                      {vsPrevious.lines.map((l, i) => (
+                        <li key={i} className="text-[12.5px] text-[var(--muted)]">
+                          {l}
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
-              </div>
-            </Card>
-
-            <Card title="Self-assessment" sub="Score how it felt and sounded to you, 1–5. These feed your skill trends.">
-              <div className="grid gap-3">
-                <DotRating label="Clarity" value={self.clarity} onChange={(v) => setSelf((s) => ({ ...s, clarity: v }))} />
-                <DotRating label="Pronunciation" value={self.pronunciation} onChange={(v) => setSelf((s) => ({ ...s, pronunciation: v }))} />
-                <DotRating label="Fluency" value={self.fluency} onChange={(v) => setSelf((s) => ({ ...s, fluency: v }))} />
-                <DotRating label="Pacing" value={self.pacing} onChange={(v) => setSelf((s) => ({ ...s, pacing: v }))} />
-                <DotRating label="Vocal control" value={self.vocalControl} onChange={(v) => setSelf((s) => ({ ...s, vocalControl: v }))} />
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Btn onClick={save} disabled={saved}>{saved ? "Save again (update)" : "Save recording"}</Btn>
-                <Btn variant="soft" onClick={download} disabled={!blob}>Download audio</Btn>
-                <Btn variant="ghost" onClick={discard}>Discard</Btn>
-                {saved && <Btn variant="soft" onClick={() => nav("progress")}>See progress →</Btn>}
               </div>
             </Card>
           </>
         )}
       </div>
 
-      {/* Side: recent recordings quick list */}
+      {/* Side: recent recordings + methodology */}
       <div className="grid content-start gap-5">
         <Card title="Recent recordings" sub={`${recordings.length} total`}>
           {recordings.length === 0 ? (
-            <p className="text-[12.5px] text-[var(--muted)]">Nothing yet. Your first recording becomes the baseline for all future comparisons.</p>
+            <p className="text-[12.5px] text-[var(--muted)]">
+              Nothing yet. Your first recording becomes the baseline for all future comparisons.
+            </p>
           ) : (
             <div className="grid gap-2">
-              {recordings.slice(0, 6).map((r) => (
-                <button key={r.id} className="flex items-center gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2 text-left hover:chip-hover" onClick={() => openHistory(r.id)}>
-                  <svg className="shrink-0 text-[var(--brand)]" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="5.5" r="3.2" /><path d="M2.5 12c1.3-2 7.7-2 9 0" /></svg>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] font-medium">{r.title}</span>
-                    <span className="text-[11px] tabular-nums text-[var(--muted)]">{fmtDur(r.durationSec)} · {r.analysis.wpm ?? "–"} wpm · {r.analysis.fillerTotal} fillers</span>
-                  </span>
-                </button>
-              ))}
-              <Btn variant="ghost" onClick={() => nav("progress")}>Full history →</Btn>
+              {recordings.slice(0, 6).map((r) => {
+                const a = getRecordingAssessment(r);
+                return (
+                  <button
+                    key={r.id}
+                    className="flex items-center gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2 text-left hover:chip-hover"
+                    onClick={() => setTargetId(r.id)}
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--brand)_14%,transparent)] font-display text-[12px] font-bold text-[var(--brand)]">
+                      {a.overallScore}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[12.5px] font-medium">{r.title}</span>
+                      <span className="text-[11px] tabular-nums text-[var(--muted)]">
+                        {fmtDur(r.durationSec)} · {r.analysis.wpm ?? "–"} wpm · {r.analysis.fillerTotal} fillers
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              <Btn variant="ghost" onClick={() => nav("progress")}>
+                Full history →
+              </Btn>
             </div>
           )}
         </Card>
-        <Card title="How this assessment works">
+        <Card title="Honest assessment methodology">
           <ul className="grid gap-2 text-[12.5px] leading-relaxed text-[var(--muted)]">
-            <li><strong className="text-[var(--ink)]">Speech-to-text</strong> runs in your browser (Chrome/Edge). Accuracy varies — it is a word-level map, never a pronunciation grade.</li>
-            <li><strong className="text-[var(--ink)]">Volume, pauses & pace</strong> come from your actual audio, sampled locally.</li>
-            <li><strong className="text-[var(--ink)]">Self-scores</strong> are the only pronunciation signal, and they are treated as such.</li>
-            <li><strong className="text-[var(--ink)]">Nothing is uploaded.</strong> Audio, transcripts, and scores live in this browser's IndexedDB.</li>
+            <li>
+              <strong className="text-[var(--ink)]">Directly measured:</strong> WPM speed, filler words, repeated words, pause durations, volume steadiness (CV &amp; dB), and fundamental vocal pitch range (F0 in semitones).
+            </li>
+            <li>
+              <strong className="text-[var(--ink)]">STT word alignment:</strong> runs locally in Chrome/Edge and maps missed words — never misrepresented as clinical pronunciation grading.
+            </li>
+            <li>
+              <strong className="text-[var(--ink)]">Listening self-check:</strong> your own ear completes the Pronunciation score after audio replay.
+            </li>
+            <li>
+              <strong className="text-[var(--ink)]">Private by design:</strong> audio, transcripts, and scores remain in this browser&apos;s IndexedDB.
+            </li>
           </ul>
         </Card>
       </div>
+
       <HistoryBridge targetId={targetId} setTargetId={setTargetId} />
     </div>
   );
 }
 
-// Bridge component: loads a historical recording into the review panel.
-function HistoryBridge({ targetId, setTargetId }: { targetId: string | null; setTargetId: (v: string | null) => void }) {
+// Loads a historical recording into a review modal (strict React 19 clean effect)
+function HistoryBridge({
+  targetId,
+  setTargetId,
+}: {
+  targetId: string | null;
+  setTargetId: (v: string | null) => void;
+}) {
   const { recordings, getBlob } = useStore();
-  const [loaded, setLoaded] = useState<Recording | null>(null);
   const [url, setUrl] = useState<string | null>(null);
-  const [tl, setTl] = useState<VolumeSample[]>([]);
-  const [cmp, setCmp] = useState<Comparison | null>(null);
+
+  const loaded = useMemo(
+    () => (targetId ? recordings.find((x) => x.id === targetId) ?? null : null),
+    [targetId, recordings]
+  );
+
   useEffect(() => {
-    if (!targetId) return;
-    const r = recordings.find((x) => x.id === targetId);
-    if (!r) return;
-    setLoaded(r);
-    setCmp(r.scriptText ? compareWords(r.scriptText, r.transcript) : null);
-    setTl([]);
-    if (r.hasAudio) {
-      getBlob(r.id).then((b) => {
-        if (b) { if (url) URL.revokeObjectURL(url); setUrl(URL.createObjectURL(b)); }
+    let active = true;
+    let objectUrl: string | null = null;
+    if (loaded?.hasAudio) {
+      void getBlob(loaded.id).then((b) => {
+        if (!active || !b) return;
+        objectUrl = URL.createObjectURL(b);
+        setUrl(objectUrl);
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId]);
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      setUrl(null);
+    };
+  }, [loaded, getBlob]);
+
   if (!loaded) return null;
-  const scores = scoreSkills({ analysis: loaded.analysis, self: loaded.self });
-  const weak3 = topWeaknesses(scores, 3);
+  const assessment = getRecordingAssessment(loaded);
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/45 p-4 backdrop-blur-[2px]" onMouseDown={() => setTargetId(null)}>
-      <div className="mx-auto mt-8 max-w-2xl rounded-2xl bg-[var(--panel)] shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="mx-auto mt-6 max-w-3xl rounded-2xl bg-[var(--panel)] shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
         <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3.5">
           <div>
             <h3 className="font-display text-[15px] font-semibold">{loaded.title}</h3>
-            <p className="text-[11.5px] text-[var(--muted)]">{loaded.dayLabel} · {fmtDur(loaded.durationSec)} · {new Date(loaded.createdAt).toLocaleString()}</p>
+            <p className="text-[11.5px] text-[var(--muted)]">
+              {loaded.dayLabel} · {fmtDur(loaded.durationSec)} · {new Date(loaded.createdAt).toLocaleString()}
+            </p>
           </div>
-          <button className="icon-btn" onClick={() => setTargetId(null)}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 4l8 8M12 4l-8 8" /></svg></button>
+          <button className="icon-btn" onClick={() => setTargetId(null)} aria-label="Close">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
         </header>
         <div className="grid gap-4 p-5">
           {url && <audio controls src={url} className="w-full" />}
-          <p className="whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13px] leading-relaxed">{loaded.transcript || "No transcript."}</p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div className="stat"><span className="stat-label">Speed</span><span className="stat-value text-[14px]">{loaded.analysis.wpm ?? "–"} wpm</span></div>
-            <div className="stat"><span className="stat-label">Fillers</span><span className="stat-value">{loaded.analysis.fillerTotal}</span></div>
-            <div className="stat"><span className="stat-label">Long pauses</span><span className="stat-value">{loaded.analysis.longPauses}</span></div>
-            <div className="stat"><span className="stat-label">Volume</span><span className="stat-value text-[14px]">{volumeLabel(loaded.analysis.volume?.cv ?? null)}</span></div>
-          </div>
-          {loaded.self && (
-            <div className="grid gap-2">
-              <SectionLabel>Self-assessment</SectionLabel>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
-                <DotRating label="Clarity" value={loaded.self.clarity} />
-                <DotRating label="Pronunciation" value={loaded.self.pronunciation} />
-                <DotRating label="Fluency" value={loaded.self.fluency} />
-                <DotRating label="Pacing" value={loaded.self.pacing} />
-                <DotRating label="Vocal control" value={loaded.self.vocalControl} />
-              </div>
-            </div>
-          )}
-          <div>
-            <SectionLabel>Coach summary</SectionLabel>
-            <ul className="mt-2 grid gap-1">
-              {weak3.map((w) => <li key={w.key} className="text-[12.5px] text-[var(--muted)]"><strong className="text-[var(--ink)]">{w.label}</strong> ({w.score.toFixed(1)}/5) — {w.note}</li>)}
-            </ul>
-          </div>
+          <AssessmentReport assessment={assessment} analysis={loaded.analysis} compact />
+          <p className="whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13px] leading-relaxed">
+            {loaded.transcript || "No transcript captured."}
+          </p>
         </div>
       </div>
     </div>

@@ -3,9 +3,21 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { SKILL_LABELS, weeklyReport, milestoneRecordings, compareRecordings } from "@/lib/coach";
+import { getRecordingAssessment, monthlyReport } from "@/lib/adaptiveCoach";
 import { paceLabel, volumeLabel } from "@/lib/analytics";
-import { type Recording, fmtDur, type SkillKey } from "@/lib/types";
-import { BarChart, Btn, Card, Chip, LineChart, Modal, Stat, VolumeTimeline } from "./ui";
+import { fmtDur, type Recording, type SkillKey } from "@/lib/types";
+import {
+  BarChart,
+  Btn,
+  Card,
+  Chip,
+  LineChart,
+  Modal,
+  ScoreBar,
+  SectionLabel,
+  Stat,
+  TrainingCalendar,
+} from "./ui";
 
 const SKILL_COLORS: Record<string, string> = {
   clarity: "#1f7a68",
@@ -25,9 +37,26 @@ function downloadText(name: string, text: string, mime = "text/plain") {
 }
 
 export default function ProgressView() {
-  const { stats, badges, skillAverages, logs, recordings, settings, deleteRecording, getBlob, exportJSON, toast } = useStore();
+  const {
+    stats,
+    badges,
+    skillAverages,
+    skillStandings,
+    improvement,
+    commonMistakes,
+    logs,
+    recordings,
+    debriefs,
+    settings,
+    deleteRecording,
+    getBlob,
+    exportJSON,
+    toast,
+  } = useStore();
+
   const [play, setPlay] = useState<{ rec: Recording; url: string | null } | null>(null);
   const [confirmDel, setConfirmDel] = useState<Recording | null>(null);
+  const [reportKind, setReportKind] = useState<"weekly" | "monthly">("weekly");
 
   const last14 = useMemo(() => {
     const out: { label: string; value: number }[] = [];
@@ -41,8 +70,16 @@ export default function ProgressView() {
     return out;
   }, [logs]);
 
+  const overallSeries = useMemo(() => {
+    const recs = [...recordings].slice(0, 14).sort((a, b) => a.createdAt - b.createdAt);
+    return {
+      labels: recs.map((r) => new Date(r.createdAt).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })),
+      points: recs.map((r) => getRecordingAssessment(r).overallScore),
+    };
+  }, [recordings]);
+
   const skillSeries = useMemo(() => {
-    const recs = [...recordings].filter((r) => r.self).slice(-14).sort((a, b) => a.createdAt - b.createdAt);
+    const recs = [...recordings].filter((r) => r.self).slice(0, 14).sort((a, b) => a.createdAt - b.createdAt);
     const keys: SkillKey[] = ["clarity", "pronunciation", "fluency", "pacing", "vocalControl"];
     return {
       labels: recs.map((r) => new Date(r.createdAt).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })),
@@ -51,10 +88,26 @@ export default function ProgressView() {
   }, [recordings]);
 
   const wpmSeries = useMemo(() => {
-    const recs = [...recordings].filter((r) => r.analysis.wpm != null).slice(-14).sort((a, b) => a.createdAt - b.createdAt);
+    const recs = [...recordings].filter((r) => r.analysis.wpm != null).slice(0, 14).sort((a, b) => a.createdAt - b.createdAt);
     return {
       labels: recs.map((r) => new Date(r.createdAt).toLocaleDateString(undefined, { month: "numeric", day: "numeric" })),
       points: recs.map((r) => r.analysis.wpm),
+    };
+  }, [recordings]);
+
+  const latestVsPrev = useMemo(() => {
+    if (recordings.length < 2) return null;
+    const latest = recordings[0];
+    const prev = recordings[1];
+    const aLatest = getRecordingAssessment(latest);
+    const aPrev = getRecordingAssessment(prev);
+    return {
+      latest,
+      prev,
+      scoreDelta: aLatest.overallScore - aPrev.overallScore,
+      latestScore: aLatest.overallScore,
+      prevScore: aPrev.overallScore,
+      lines: compareRecordings(prev, latest),
     };
   }, [recordings]);
 
@@ -67,14 +120,18 @@ export default function ProgressView() {
     return out;
   }, [milestones]);
 
-  const weakest = useMemo(() => {
-    const entries = Object.entries(skillAverages).filter(([, v]) => v != null) as [string, number][];
-    if (!entries.length) return null;
-    entries.sort((a, b) => a[1] - b[1]);
-    return { key: entries[0][0] as SkillKey, value: entries[0][1] };
-  }, [skillAverages]);
+  const rankedStandings = useMemo(
+    () => [...skillStandings].filter((s) => s.score != null).sort((a, b) => (b.score as number) - (a.score as number)),
+    [skillStandings]
+  );
 
-  const report = useMemo(() => weeklyReport(recordings, logs, skillAverages as Record<SkillKey, number | null>), [recordings, logs, skillAverages]);
+  const reportText = useMemo(
+    () =>
+      reportKind === "weekly"
+        ? weeklyReport(recordings, logs, skillAverages as Record<SkillKey, number | null>)
+        : monthlyReport(recordings, logs, skillAverages as Record<SkillKey, number | null>),
+    [reportKind, recordings, logs, skillAverages]
+  );
 
   const openPlay = async (r: Recording) => {
     let url: string | null = null;
@@ -92,7 +149,10 @@ export default function ProgressView() {
 
   const downloadRec = async (r: Recording) => {
     const b = await getBlob(r.id);
-    if (!b) { toast("No audio stored for this recording", "err"); return; }
+    if (!b) {
+      toast("No audio stored for this recording", "err");
+      return;
+    }
     const u = URL.createObjectURL(b);
     const a = document.createElement("a");
     a.href = u;
@@ -102,22 +162,67 @@ export default function ProgressView() {
   };
 
   const exportLogsCsv = () => {
-    const rows = [["date", "seconds", "mode", "exercises_completed", "clarity", "pronunciation", "fluency", "pacing", "vocal_control"]];
+    const rows = [["date", "seconds", "mode", "exercises_completed", "overall_score", "clarity", "pronunciation", "fluency", "pacing", "vocal_control"]];
     for (const l of [...logs].sort((a, b) => a.ts - b.ts)) {
-      rows.push([l.date, String(l.seconds), l.mode, String(l.completed), String(l.scores?.clarity ?? ""), String(l.scores?.pronunciation ?? ""), String(l.scores?.fluency ?? ""), String(l.scores?.pacing ?? ""), String(l.scores?.vocalControl ?? "")]);
+      rows.push([
+        l.date,
+        String(l.seconds),
+        l.mode,
+        String(l.completed),
+        String(l.overallScore ?? ""),
+        String(l.scores?.clarity ?? ""),
+        String(l.scores?.pronunciation ?? ""),
+        String(l.scores?.fluency ?? ""),
+        String(l.scores?.pacing ?? ""),
+        String(l.scores?.vocalControl ?? ""),
+      ]);
     }
     downloadText(`speechcoach-logs-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
     toast("Logs CSV downloaded");
   };
 
   const exportRecsCsv = () => {
-    const rows = [["date", "title", "mode", "duration_s", "wpm", "fillers", "long_pauses", "repeats", "volume_cv", "coverage_pct", "clarity", "pronunciation", "fluency", "pacing", "vocal_control"]];
+    const rows = [
+      [
+        "date",
+        "title",
+        "mode",
+        "duration_s",
+        "overall_100",
+        "wpm",
+        "fillers",
+        "long_pauses",
+        "pitch_semitones",
+        "repeats",
+        "volume_cv",
+        "coverage_pct",
+        "clarity",
+        "pronunciation",
+        "fluency",
+        "pacing",
+        "vocal_control",
+      ],
+    ];
     for (const r of [...recordings].sort((a, b) => a.createdAt - b.createdAt)) {
+      const a = getRecordingAssessment(r);
       rows.push([
-        new Date(r.createdAt).toISOString().slice(0, 10), `"${r.title.replace(/"/g, "'")}"`, r.mode, String(r.durationSec),
-        String(r.analysis.wpm ?? ""), String(r.analysis.fillerTotal), String(r.analysis.longPauses),
-        `"${r.analysis.repeats.join("; ")}"`, String(r.analysis.volume ? r.analysis.volume.cv.toFixed(3) : ""),
-        String(r.analysis.coverage ?? ""), String(r.self?.clarity ?? ""), String(r.self?.pronunciation ?? ""), String(r.self?.fluency ?? ""), String(r.self?.pacing ?? ""), String(r.self?.vocalControl ?? ""),
+        new Date(r.createdAt).toISOString().slice(0, 10),
+        `"${r.title.replace(/"/g, "'")}"`,
+        r.mode,
+        String(r.durationSec),
+        String(a.overallScore),
+        String(r.analysis.wpm ?? ""),
+        String(r.analysis.fillerTotal),
+        String(r.analysis.longPauses),
+        String(r.analysis.pitch ? r.analysis.pitch.semitoneRange : ""),
+        `"${r.analysis.repeats.join("; ")}"`,
+        String(r.analysis.volume ? r.analysis.volume.cv.toFixed(3) : ""),
+        String(r.analysis.coverage ?? ""),
+        String(r.self?.clarity ?? ""),
+        String(r.self?.pronunciation ?? ""),
+        String(r.self?.fluency ?? ""),
+        String(r.self?.pacing ?? ""),
+        String(r.self?.vocalControl ?? ""),
       ]);
     }
     downloadText(`speechcoach-recordings-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
@@ -126,129 +231,305 @@ export default function ProgressView() {
 
   return (
     <div className="grid gap-5">
-      {/* stat tiles */}
+      {/* Stat tiles */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Practice time" value={fmtDur(stats.totalSec)} sub={`${stats.sessionCount} sessions`} />
         <Stat label="Current streak" value={`${stats.currentStreak}d`} sub={`best ${stats.bestStreak}d`} tone="accent" />
         <Stat label="Days practiced" value={stats.daysPracticed} sub="all-time" />
         <Stat label="Recordings" value={stats.recordingCount} sub="in history" />
-        <Stat label="Best score avg" value={stats.bestAvgScore > 0 ? `${stats.bestAvgScore.toFixed(1)}/5` : "–"} sub="self-assessment" tone="brand" />
+        <Stat
+          label="Speaking score"
+          value={improvement.currentAvg != null ? `${improvement.currentAvg}/100` : "–"}
+          sub={
+            improvement.delta != null && improvement.recordingCount >= 2
+              ? `${improvement.delta >= 0 ? "+" : ""}${improvement.delta} pts vs baseline`
+              : "recent average"
+          }
+          tone="brand"
+        />
         <Stat label="Peak pace" value={stats.maxWpm > 0 ? `${stats.maxWpm}` : "–"} sub="wpm" />
       </div>
 
+      {/* Overall Score (/100) + Training Calendar */}
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Daily practice — last 14 days" sub={`Daily goal: ${settings.dailyGoalMin} min — bars at or above it turn solid green.`}>
+        <Card title="Overall speaking score over time (0–100)" sub="Weighted composite of measured pace, fluency, pauses, clarity, expression, and self-checked pronunciation.">
+          {overallSeries.points.length === 0 ? (
+            <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+              Record your first practice session to start tracking your overall score curve.
+            </p>
+          ) : (
+            <LineChart
+              series={[{ name: "Overall / 100", color: "#1f7a68", points: overallSeries.points }]}
+              labels={overallSeries.labels}
+              yMax={100}
+            />
+          )}
+        </Card>
+
+        <Card title="Training calendar" sub="Click any date to inspect total minutes and completed sessions.">
+          <TrainingCalendar logs={logs} goalMin={settings.dailyGoalMin} />
+        </Card>
+      </div>
+
+      {/* Strongest vs Weakest Areas + Most Common Mistakes */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Strongest & weakest speaking areas" sub="Running 0–100 averages across your recorded takes.">
+          {rankedStandings.length === 0 ? (
+            <p className="py-8 text-center text-[13px] text-[var(--muted)]">
+              Complete at least one recording to see your strengths and weaknesses breakdown.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              {rankedStandings.map((s, idx) => (
+                <div key={s.skill} className="grid gap-1">
+                  <div className="flex items-center justify-between gap-2 text-[12.5px]">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{s.label}</span>
+                      {idx === 0 && <Chip tone="good">Strongest</Chip>}
+                      {idx === rankedStandings.length - 1 && rankedStandings.length > 1 && <Chip tone="bad">Focus area</Chip>}
+                    </div>
+                    <span className="font-display font-bold tabular-nums">{s.score}/100</span>
+                  </div>
+                  <ScoreBar value={s.score ?? 0} />
+                  <p className="text-[11px] text-[var(--muted)]">{s.evidence}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card title="Most common mistakes" sub="Patterns spotted across your saved recordings.">
+          {recordings.length === 0 ? (
+            <p className="py-8 text-center text-[13px] text-[var(--muted)]">
+              Save recordings and your coach will surface recurring fillers, repeated words, pace habits, and commonly missed words.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="rounded-lg bg-[var(--panel2)] p-3">
+                  <SectionLabel>Pace tendency</SectionLabel>
+                  <p className="mt-1 text-[13.5px] font-semibold">{commonMistakes.paceTendency.label}</p>
+                  <p className="mt-0.5 text-[11.5px] text-[var(--muted)]">{commonMistakes.paceTendency.detail}</p>
+                </div>
+                <div className="rounded-lg bg-[var(--panel2)] p-3">
+                  <SectionLabel>Pause &amp; breath habit</SectionLabel>
+                  <p className="mt-1 text-[13.5px] font-semibold">{commonMistakes.pauseTendency.label}</p>
+                  <p className="mt-0.5 text-[11.5px] text-[var(--muted)]">{commonMistakes.pauseTendency.detail}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-[var(--panel2)] p-3">
+                <SectionLabel>Top recurring filler words</SectionLabel>
+                {commonMistakes.topFillers.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {commonMistakes.topFillers.map((f) => (
+                      <Chip key={f.word} tone="warn">“{f.word}” ×{f.count}</Chip>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[12px] text-[var(--good)]">Clean record — no recurring filler words detected.</p>
+                )}
+              </div>
+
+              {commonMistakes.topMissedWords.length > 0 && (
+                <div className="rounded-lg bg-[var(--panel2)] p-3">
+                  <SectionLabel>Frequently missed / rough script words</SectionLabel>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {commonMistakes.topMissedWords.map((w) => (
+                      <Chip key={w.word} tone="bad">{w.word} ×{w.count}</Chip>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {commonMistakes.topRepeats.length > 0 && (
+                <div className="rounded-lg bg-[var(--panel2)] p-3">
+                  <SectionLabel>Repeated / restarted words</SectionLabel>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {commonMistakes.topRepeats.map((r) => (
+                      <Chip key={r.word} tone="accent">{r.word} ×{r.count}</Chip>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Latest vs Previous Attempt + Daily Minutes */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Daily practice — last 14 days" sub={`Daily goal: ${settings.dailyGoalMin} min — bars at or above it turn solid teal.`}>
           <BarChart data={last14} goal={settings.dailyGoalMin} unit="m" />
         </Card>
-        <Card title="Skills over time" sub="Self-assessment per recording (1–5). New recordings extend the lines.">
+
+        <Card title="Latest vs previous attempt" sub="Direct side-by-side comparison of your two most recent takes.">
+          {!latestVsPrev ? (
+            <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+              Save at least 2 recordings to compare your latest performance directly against your previous attempt.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-[var(--panel2)] p-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-[var(--muted)]">Previous → Latest</p>
+                  <p className="font-display text-[20px] font-bold">
+                    {latestVsPrev.prevScore} → {latestVsPrev.latestScore} / 100
+                  </p>
+                </div>
+                <Chip tone={latestVsPrev.scoreDelta > 0 ? "good" : latestVsPrev.scoreDelta < 0 ? "warn" : "muted"}>
+                  {latestVsPrev.scoreDelta >= 0 ? `+${latestVsPrev.scoreDelta}` : latestVsPrev.scoreDelta} pts
+                </Chip>
+              </div>
+              <div className="text-[12px] text-[var(--muted)]">
+                <p>Previous: <strong className="text-[var(--ink)]">{latestVsPrev.prev.title}</strong> ({new Date(latestVsPrev.prev.createdAt).toLocaleDateString()})</p>
+                <p>Latest: <strong className="text-[var(--ink)]">{latestVsPrev.latest.title}</strong> ({new Date(latestVsPrev.latest.createdAt).toLocaleDateString()})</p>
+              </div>
+              <ul className="grid gap-1 rounded-lg bg-[var(--panel2)] p-3">
+                {latestVsPrev.lines.map((l, i) => (
+                  <li key={i} className="text-[12.5px] text-[var(--ink)]">{l}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Preserved Skill Trends & WPM */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Self-assessment skills over time" sub="Listening self-check ratings (1–5) per recording.">
           {skillSeries.series.every((s) => s.points.every((p) => p == null)) ? (
-            <p className="py-10 text-center text-[13px] text-[var(--muted)]">Score your first recording's self-assessment to start the trend lines.</p>
+            <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+              Score your first recording&apos;s self-assessment to start the 5-skill trend lines.
+            </p>
           ) : (
             <LineChart series={skillSeries.series} labels={skillSeries.labels} yMax={5} />
           )}
         </Card>
-      </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Speaking speed (wpm)" sub="From your recordings — aim for the 120–150 band.">
+        <Card title="Speaking speed (WPM)" sub="From your recordings — aim for the 120–150 band.">
           {wpmSeries.points.length === 0 ? (
-            <p className="py-10 text-center text-[13px] text-[var(--muted)]">No pace data yet — record something with a few minutes of speech.</p>
+            <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+              No pace data yet — record something with at least 10 seconds of speech.
+            </p>
           ) : (
-            <LineChart series={[{ name: "wpm", color: SKILL_COLORS.pacing, points: wpmSeries.points }]} labels={wpmSeries.labels} yMax={200} />
-          )}
-        </Card>
-
-        <Card title="Weakness tracker" sub="Your lowest current average skill, all-time.">
-          {weakest ? (
-            <div className="grid gap-3">
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: `color-mix(in srgb, ${SKILL_COLORS[weakest.key]} 15%, transparent)`, color: SKILL_COLORS[weakest.key] }}>
-                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3 14l3.5-4 3 2.5L15 5M15 5h-4M15 5v4" /></svg>
-                </span>
-                <div>
-                  <p className="text-[15px] font-semibold">{SKILL_LABELS[weakest.key]}</p>
-                  <p className="text-[12px] tabular-nums text-[var(--muted)]">{weakest.value.toFixed(1)}/5 all-time average</p>
-                </div>
-              </div>
-              <p className="text-[12.5px] leading-relaxed text-[var(--muted)]">
-                Routing: {weakest.key === "fluency" && "Fluency mode + Silent Beat drill from the Library."}
-                {weakest.key === "pacing" && "Pacing drills in the Library (Speed Ladder, Slow-Down) and the pacing section of Today."}
-                {weakest.key === "clarity" && "Articulation drills (S/Z, T/D/N, B/P/V/W) + slow reading at 90 wpm."}
-                {weakest.key === "pronunciation" && "Pronunciation mode, Minimal Pairs Sprint, and shadowing sentences."}
-                {weakest.key === "vocalControl" && "Breathing Trainer before every session + the Volume Consistency Check exercise."}
-                Revisit after ~5 more recordings; averages are noisy early on.
-              </p>
-            </div>
-          ) : (
-            <p className="py-8 text-center text-[13px] text-[var(--muted)]">Complete one self-assessment to activate the weakness tracker.</p>
+            <LineChart
+              series={[{ name: "wpm", color: SKILL_COLORS.pacing, points: wpmSeries.points }]}
+              labels={wpmSeries.labels}
+              yMax={200}
+            />
           )}
         </Card>
       </div>
 
+      {/* Recording History (Preserved + 100-point badge) */}
       <Card title="Recording history" sub={`${recordings.length} recordings — playback, analysis, download, or delete. All local.`}>
         {recordings.length === 0 ? (
-          <p className="py-8 text-center text-[13px] text-[var(--muted)]">No recordings yet. The Record page is where your history begins.</p>
+          <p className="py-8 text-center text-[13px] text-[var(--muted)]">
+            No recordings yet. The Record page or Guided Daily Session is where your history begins.
+          </p>
         ) : (
           <div className="grid gap-2">
-            {recordings.map((r) => (
-              <div key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-3 py-2.5">
-                <button className="icon-btn" onClick={() => openPlay(r)} title="Play">
-                  {r.hasAudio ? (
-                    <svg width="15" height="15" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
-                  ) : (
-                    <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5.2" /><path d="M7 4.5V7l1.8 1" /></svg>
-                  )}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium">{r.title}</p>
-                  <p className="text-[11px] tabular-nums text-[var(--muted)]">
-                    {new Date(r.createdAt).toLocaleDateString()} · {fmtDur(r.durationSec)} · {paceLabel(r.analysis.wpm).label} · fillers {r.analysis.fillerTotal} · pauses {r.analysis.longPauses} · {r.analysis.volume ? volumeLabel(r.analysis.volume.cv) : "no volume data"}
-                    {r.analysis.coverage != null && ` · coverage ${r.analysis.coverage}%`}
-                  </p>
-                </div>
-                {r.self && (
-                  <Chip tone="brand">
-                    {Object.values(r.self).filter((v) => v > 0).length > 0
-                      ? `${(Object.values(r.self).filter((v) => v > 0).reduce((a, b) => a + b, 0) / Object.values(r.self).filter((v) => v > 0).length).toFixed(1)}/5`
-                      : "unrated"}
+            {recordings.map((r) => {
+              const a = getRecordingAssessment(r);
+              return (
+                <div key={r.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-3 py-2.5">
+                  <button className="icon-btn" onClick={() => void openPlay(r)} title="Play">
+                    {r.hasAudio ? (
+                      <svg width="15" height="15" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="7" cy="7" r="5.2" /><path d="M7 4.5V7l1.8 1" /></svg>
+                    )}
+                  </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[13px] font-medium">{r.title}</p>
+                    <p className="text-[11px] tabular-nums text-[var(--muted)]">
+                      {new Date(r.createdAt).toLocaleDateString()} · {fmtDur(r.durationSec)} · {paceLabel(r.analysis.wpm).label} · fillers {r.analysis.fillerTotal} · pauses {r.analysis.longPauses}
+                      {r.analysis.pitch ? ` · pitch ${r.analysis.pitch.semitoneRange.toFixed(1)}st` : ""}
+                      {r.analysis.coverage != null && ` · match ${r.analysis.coverage}%`}
+                    </p>
+                  </div>
+                  <Chip tone={a.overallScore >= 80 ? "good" : a.overallScore >= 60 ? "brand" : "warn"}>
+                    {a.overallScore}/100
                   </Chip>
-                )}
-                <div className="flex items-center gap-1">
-                  <button className="icon-btn" title="Download" onClick={() => downloadRec(r)}><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 2v7M4.5 6.5L7 9l2.5-2.5M2.5 11.5h9" /></svg></button>
-                  <button className="icon-btn hover:text-[var(--bad)]" title="Delete" onClick={() => setConfirmDel(r)}><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2.5 3.5h9M5.5 3.5V2h3v1.5M3.5 3.5l.7 8h5.6l.7-8" /></svg></button>
+                  <div className="flex items-center gap-1">
+                    <button className="icon-btn" title="Download" onClick={() => void downloadRec(r)}>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M7 2v7M4.5 6.5L7 9l2.5-2.5M2.5 11.5h9" /></svg>
+                    </button>
+                    <button className="icon-btn hover:text-[var(--bad)]" title="Delete" onClick={() => setConfirmDel(r)}>
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4"><path d="M2.5 3.5h9M5.5 3.5V2h3v1.5M3.5 3.5l.7 8h5.6l.7-8" /></svg>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Card>
 
+      {/* Coach Debrief History */}
+      {debriefs.length > 0 && (
+        <Card title="Daily coaching debrief history" sub="How your personal coach evaluated your sessions and evolved your plan.">
+          <div className="grid gap-2.5">
+            {debriefs.slice(0, 6).map((d) => (
+              <div key={d.id} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Chip tone="brand">{d.date}</Chip>
+                  {d.avgOverallScore != null && <Chip tone="good">{d.avgOverallScore}/100</Chip>}
+                  <Chip tone="warn">Focus: {d.biggestWeakness.label}</Chip>
+                  <span className="ml-auto text-[11px] text-[var(--muted)]">{fmtDur(d.durationSec)}</span>
+                </div>
+                <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--ink)]">{d.summary}</p>
+                <p className="mt-1 text-[11.5px] text-[var(--brand)]">{d.planChangeNote}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* Milestones & Achievements */}
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Milestone comparison" sub="Automatic Day 1 vs Day 7 vs Day 30 (and beyond) from your recording dates.">
           {milestones.length < 2 ? (
-            <p className="py-8 text-center text-[13px] text-[var(--muted)]">Record on at least two dates at least a few days apart and the coach will line them up here.</p>
+            <p className="py-8 text-center text-[13px] text-[var(--muted)]">
+              Record on at least two dates a few days apart and the coach will line them up here.
+            </p>
           ) : (
             <div className="grid gap-3">
               {milestones.map((m) => (
                 <div key={m.rec.id} className="flex items-center gap-3">
                   <Chip tone="brand">{m.label}</Chip>
-                  <span className="truncate text-[12.5px] text-[var(--muted)]">{m.rec.title} · {new Date(m.rec.createdAt).toLocaleDateString()}</span>
+                  <span className="truncate text-[12.5px] text-[var(--muted)]">
+                    {m.rec.title} · {new Date(m.rec.createdAt).toLocaleDateString()}
+                  </span>
                 </div>
               ))}
               <div className="mt-1 grid gap-1.5 rounded-lg bg-[var(--panel2)] p-3">
-                {milestoneLines.map((l, i) => <p key={i} className="text-[12.5px] leading-relaxed text-[var(--muted)]">{l}</p>)}
+                {milestoneLines.map((l, i) => (
+                  <p key={i} className="text-[12.5px] leading-relaxed text-[var(--muted)]">
+                    {l}
+                  </p>
+                ))}
               </div>
             </div>
           )}
         </Card>
 
-        <Card title="Achievement badges" sub="Earned from your real logged activity.">
+        <Card title="Personal milestones & achievements" sub="Grounded in real logged practice — never hollow gamification.">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {badges.map((b) => (
-              <div key={b.id} className={`rounded-lg border p-2.5 ${b.earned ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_8%,transparent)]" : "border-[var(--line)] opacity-55"}`}>
+              <div
+                key={b.id}
+                className={`rounded-lg border p-2.5 ${
+                  b.earned
+                    ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_8%,transparent)]"
+                    : "border-[var(--line)] opacity-55"
+                }`}
+              >
                 <div className="flex items-center gap-1.5">
                   <svg width="14" height="14" viewBox="0 0 14 14" fill={b.earned ? "var(--brand)" : "none"} stroke={b.earned ? "var(--brand)" : "var(--muted)"} strokeWidth="1.3">
-                    <circle cx="7" cy="5.5" r="3.8" /><path d="M4.5 8.5L3.5 12l3.5-1.5L10.5 12l-1-3.5" />
+                    <circle cx="7" cy="5.5" r="3.8" />
+                    <path d="M4.5 8.5L3.5 12l3.5-1.5L10.5 12l-1-3.5" />
                   </svg>
                   <span className="text-[12px] font-semibold leading-tight">{b.name}</span>
                 </div>
@@ -259,28 +540,78 @@ export default function ProgressView() {
         </Card>
       </div>
 
+      {/* Weekly & Monthly Reports + Exports */}
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Weekly report" sub="Generated from the last 7 days.">
-          <pre className="whitespace-pre-wrap rounded-lg bg-[var(--panel2)] p-3 font-mono text-[12px] leading-relaxed">{report}</pre>
+        <Card
+          title={reportKind === "weekly" ? "Weekly coaching report" : "Monthly coaching report"}
+          sub={reportKind === "weekly" ? "Generated from the last 7 days." : "Generated from the last 30 days."}
+          right={
+            <div className="inline-flex rounded-lg border border-[var(--line)] p-0.5 text-[11px]">
+              {(["weekly", "monthly"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setReportKind(k)}
+                  className={`rounded-md px-2.5 py-1 font-semibold capitalize ${
+                    reportKind === k ? "bg-[var(--brand)] text-white" : "text-[var(--muted)]"
+                  }`}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+          }
+        >
+          <pre className="whitespace-pre-wrap rounded-lg bg-[var(--panel2)] p-3 font-mono text-[12px] leading-relaxed">
+            {reportText}
+          </pre>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Btn variant="soft" onClick={() => { navigator.clipboard?.writeText(report); toast("Report copied to clipboard"); }}>Copy</Btn>
-            <Btn variant="soft" onClick={() => downloadText(`speechcoach-weekly-report-${new Date().toISOString().slice(0, 10)}.md`, report, "text/markdown")}>Download .md</Btn>
+            <Btn
+              variant="soft"
+              onClick={() => {
+                void navigator.clipboard?.writeText(reportText);
+                toast("Report copied to clipboard");
+              }}
+            >
+              Copy
+            </Btn>
+            <Btn
+              variant="soft"
+              onClick={() =>
+                downloadText(
+                  `speechcoach-${reportKind}-report-${new Date().toISOString().slice(0, 10)}.md`,
+                  reportText,
+                  "text/markdown"
+                )
+              }
+            >
+              Download .md
+            </Btn>
           </div>
         </Card>
 
         <Card title="Export progress reports" sub="Take your data anywhere — it is yours.">
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2.5">
-              <div><p className="text-[13px] font-medium">Practice logs (CSV)</p><p className="text-[11.5px] text-[var(--muted)]">Every session: date, minutes, mode, scores</p></div>
+              <div>
+                <p className="text-[13px] font-medium">Practice logs (CSV)</p>
+                <p className="text-[11.5px] text-[var(--muted)]">Every session: date, minutes, mode, scores</p>
+              </div>
               <Btn variant="soft" onClick={exportLogsCsv}>Export</Btn>
             </div>
             <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2.5">
-              <div><p className="text-[13px] font-medium">Recording analysis (CSV)</p><p className="text-[11.5px] text-[var(--muted)]">WPM, fillers, pauses, volume, coverage, self-scores</p></div>
+              <div>
+                <p className="text-[13px] font-medium">Recording analysis (CSV)</p>
+                <p className="text-[11.5px] text-[var(--muted)]">Overall /100, WPM, fillers, pauses, pitch, volume, self-scores</p>
+              </div>
               <Btn variant="soft" onClick={exportRecsCsv}>Export</Btn>
             </div>
             <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2.5">
-              <div><p className="text-[13px] font-medium">Full JSON backup</p><p className="text-[11.5px] text-[var(--muted)]">Everything incl. audio — for the Data page import</p></div>
-              <Btn variant="soft" onClick={() => exportJSON(true)}>Export</Btn>
+              <div>
+                <p className="text-[13px] font-medium">Full JSON backup</p>
+                <p className="text-[11.5px] text-[var(--muted)]">Everything incl. audio, profile, plan, and debriefs</p>
+              </div>
+              <Btn variant="soft" onClick={() => void exportJSON(true)}>Export</Btn>
             </div>
           </div>
         </Card>
@@ -290,16 +621,22 @@ export default function ProgressView() {
       <Modal open={!!play} onClose={closePlay} title={play?.rec.title ?? ""} wide>
         {play && (
           <div className="grid gap-4">
-            {play.url ? <audio controls src={play.url} className="w-full" /> : <p className="text-[13px] text-[var(--muted)]">No audio stored for this recording (it was saved without audio).</p>}
-            <p className="whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13px] leading-relaxed">{play.rec.transcript || "No transcript captured."}</p>
+            {play.url ? (
+              <audio controls src={play.url} className="w-full" />
+            ) : (
+              <p className="text-[13px] text-[var(--muted)]">No audio stored for this recording.</p>
+            )}
+            <p className="whitespace-pre-line rounded-lg bg-[var(--panel2)] p-3 text-[13px] leading-relaxed">
+              {play.rec.transcript || "No transcript captured."}
+            </p>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Overall" value={`${getRecordingAssessment(play.rec).overallScore}/100`} tone="brand" />
               <Stat label="Speed" value={`${play.rec.analysis.wpm ?? "–"} wpm`} />
               <Stat label="Fillers" value={play.rec.analysis.fillerTotal} />
-              <Stat label="Long pauses" value={play.rec.analysis.longPauses} />
               <Stat label="Volume" value={volumeLabel(play.rec.analysis.volume?.cv ?? null)} />
             </div>
             <div className="flex justify-end gap-2">
-              <Btn variant="soft" onClick={() => downloadRec(play.rec)}>Download audio</Btn>
+              <Btn variant="soft" onClick={() => void downloadRec(play.rec)}>Download audio</Btn>
             </div>
           </div>
         )}
@@ -314,7 +651,16 @@ export default function ProgressView() {
             </p>
             <div className="flex justify-end gap-2">
               <Btn variant="ghost" onClick={() => setConfirmDel(null)}>Cancel</Btn>
-              <Btn variant="danger" onClick={async () => { await deleteRecording(confirmDel.id); setConfirmDel(null); toast("Recording deleted", "info"); }}>Delete</Btn>
+              <Btn
+                variant="danger"
+                onClick={async () => {
+                  await deleteRecording(confirmDel.id);
+                  setConfirmDel(null);
+                  toast("Recording deleted", "info");
+                }}
+              >
+                Delete
+              </Btn>
             </div>
           </div>
         )}

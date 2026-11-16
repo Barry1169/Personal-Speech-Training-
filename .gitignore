@@ -5,6 +5,7 @@ node_modules/
 # Next.js generated files
 .next/
 out/
+*.tsbuildinfo
 
 # Build output
 build/
