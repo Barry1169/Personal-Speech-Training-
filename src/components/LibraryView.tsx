@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { BUILTIN_EXERCISES } from "@/lib/program";
+import { hasDevanagari } from "@/lib/analytics";
 import { CATEGORIES, type Difficulty, type Exercise, fmtDur } from "@/lib/types";
 import { speakSingle } from "@/lib/tts";
 import { Btn, Card, Chip, Field, Input, Modal, Select, Textarea, Timer } from "./ui";
@@ -13,7 +14,18 @@ const emptyForm = {
 };
 
 export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
-  const { settings, setSettings, exercises, addExercise, updateExercise, deleteExercise, toggleFavorite, openAddWord, toast } = useStore();
+  const {
+    practiceLanguage,
+    settings,
+    setSettings,
+    exercises,
+    addExercise,
+    updateExercise,
+    deleteExercise,
+    toggleFavorite,
+    openAddWord,
+    toast,
+  } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("all");
   const [diff, setDiff] = useState("all");
@@ -137,7 +149,15 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
                         type="button"
                         className="icon-btn shrink-0"
                         title="Hear model audio"
-                        onClick={() => speakSingle(m, settings.ttsRate, settings.preferredVoice)}
+                        onClick={() => {
+                          const isHi = detail.language === "hi" || hasDevanagari(m);
+                          speakSingle(
+                            m,
+                            settings.ttsRate,
+                            isHi ? settings.preferredVoiceHi : settings.preferredVoice,
+                            isHi ? "hi" : "en"
+                          );
+                        }}
                       >
                         <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
                       </button>
@@ -155,11 +175,14 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
                 <Btn
                   variant="primary"
                   onClick={() => {
+                    const combined = detail.material.join("\n");
+                    const isHi = detail.language === "hi" || hasDevanagari(combined);
                     setSettings({
                       task: {
                         title: detail.name,
                         mode: detail.category,
-                        script: detail.material.join("\n"),
+                        language: isHi ? "hi" : "en",
+                        script: combined,
                       },
                     });
                     toast(`Loaded "${detail.name}" in Recorder`, "info");
@@ -188,6 +211,7 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
         onSave={(f) => {
           const payload = {
             name: f.name.trim(), category: f.category, difficulty: f.difficulty,
+            language: practiceLanguage,
             durationSec: f.durationSec, reps: f.reps, restSec: f.restSec,
             instructions: f.instructions.trim(),
             material: f.materialText.split("\n").map((s) => s.trim()).filter(Boolean),

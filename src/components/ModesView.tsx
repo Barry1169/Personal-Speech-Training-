@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 import { MODES, SCENARIOS, type ModeContent, type Scenario } from "@/lib/program";
-import { COACHED_MATERIALS } from "@/lib/materials";
+import { getMaterialsForLanguage } from "@/lib/materials";
 import {
   MATERIAL_TYPE_LABELS,
   fmtDur,
@@ -54,7 +54,8 @@ const MATERIAL_TYPES: PracticeMaterialType[] = [
 ];
 
 export default function ModesView({ nav }: { nav: (v: string) => void }) {
-  const { settings, coachPlan, profile, setSettings, openAddWord, toast } = useStore();
+  const { practiceLanguage, settings, coachPlan, profile, setSettings, openAddWord, toast } = useStore();
+  const langMaterials = useMemo(() => getMaterialsForLanguage(practiceLanguage), [practiceLanguage]);
   const [section, setSection] = useState<"materials" | "modes">("materials");
   const [focusTrack, setFocusTrack] = useState<"all" | "stammering" | "youtube">(() =>
     profile.goals.includes("stammer_fluency")
@@ -66,13 +67,14 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
   const [matType, setMatType] = useState<PracticeMaterialType | "all">("all");
   const [matDiff, setMatDiff] = useState<Difficulty | "all">("all");
   const [selectedMaterial, setSelectedMaterial] = useState<CoachedExercise>(() => {
+    const list = getMaterialsForLanguage(practiceLanguage);
     if (profile.goals.includes("stammer_fluency")) {
-      return COACHED_MATERIALS.find((m) => m.focusTags?.includes("stammering")) ?? COACHED_MATERIALS[0];
+      return list.find((m) => m.focusTags?.includes("stammering")) ?? list[0];
     }
     if (profile.goals.includes("youtube_creator")) {
-      return COACHED_MATERIALS.find((m) => m.focusTags?.includes("youtube")) ?? COACHED_MATERIALS[0];
+      return list.find((m) => m.focusTags?.includes("youtube")) ?? list[0];
     }
-    return COACHED_MATERIALS.find((m) => m.difficulty === coachPlan.difficulty) ?? COACHED_MATERIALS[0];
+    return list.find((m) => m.difficulty === coachPlan.difficulty) ?? list[0];
   });
 
   const [active, setActive] = useState<ModeContent | Scenario | null>(null);
@@ -107,28 +109,28 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
 
   const filteredMaterials = useMemo(
     () =>
-      COACHED_MATERIALS.filter((m) => {
+      langMaterials.filter((m) => {
         if (focusTrack !== "all" && !m.focusTags?.includes(focusTrack)) return false;
         if (matType !== "all" && m.materialType !== matType) return false;
         if (matDiff !== "all" && m.difficulty !== matDiff) return false;
         return true;
       }),
-    [focusTrack, matType, matDiff]
+    [langMaterials, focusTrack, matType, matDiff]
   );
 
   const stammerCount = useMemo(
-    () => COACHED_MATERIALS.filter((m) => m.focusTags?.includes("stammering")).length,
-    []
+    () => langMaterials.filter((m) => m.focusTags?.includes("stammering")).length,
+    [langMaterials]
   );
   const youtubeCount = useMemo(
-    () => COACHED_MATERIALS.filter((m) => m.focusTags?.includes("youtube")).length,
-    []
+    () => langMaterials.filter((m) => m.focusTags?.includes("youtube")).length,
+    [langMaterials]
   );
 
   const isMode = (x: ModeContent | Scenario | null): x is ModeContent => !!x && "usesTTS" in x;
 
   const sendToRecorder = (title: string, script: string, mode: string) => {
-    setSettings({ task: { title, mode, script } });
+    setSettings({ task: { title, mode, language: practiceLanguage, script } });
     toast("Task loaded in the Recorder", "info");
     nav("record");
   };
@@ -138,7 +140,9 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
       task: {
         title: ex.title,
         mode: ex.materialType === "impromptu" ? "impromptu" : ex.materialType,
+        language: ex.language ?? practiceLanguage,
         script: ex.plainText,
+        romanizedText: ex.romanizedText,
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
@@ -174,7 +178,7 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
               section === "materials" ? "bg-[var(--brand)] text-white" : "text-[var(--muted)] hover:text-[var(--ink)]"
             }`}
           >
-            Coached Practice Materials ({COACHED_MATERIALS.length})
+            Coached {practiceLanguage === "hi" ? "Hindi" : "English"} Materials ({langMaterials.length})
           </button>
           <button
             type="button"
@@ -204,7 +208,7 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
                   onClick={() => setFocusTrack("all")}
                   className={`chip cursor-pointer ${focusTrack === "all" ? "chip-brand" : "chip-muted"}`}
                 >
-                  All Materials ({COACHED_MATERIALS.length})
+                  All Materials ({langMaterials.length})
                 </button>
                 <button
                   type="button"
@@ -212,7 +216,7 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
                     setFocusTrack("stammering");
                     setMatType("all");
                     setMatDiff("all");
-                    const first = COACHED_MATERIALS.find((m) => m.focusTags?.includes("stammering"));
+                    const first = langMaterials.find((m) => m.focusTags?.includes("stammering"));
                     if (first) setSelectedMaterial(first);
                   }}
                   className={`chip cursor-pointer ${focusTrack === "stammering" ? "chip-good" : "chip-muted"}`}
@@ -225,7 +229,7 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
                     setFocusTrack("youtube");
                     setMatType("all");
                     setMatDiff("all");
-                    const first = COACHED_MATERIALS.find((m) => m.focusTags?.includes("youtube"));
+                    const first = langMaterials.find((m) => m.focusTags?.includes("youtube"));
                     if (first) setSelectedMaterial(first);
                   }}
                   className={`chip cursor-pointer ${focusTrack === "youtube" ? "chip-accent" : "chip-muted"}`}

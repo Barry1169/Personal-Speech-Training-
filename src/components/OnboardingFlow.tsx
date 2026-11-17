@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useStore } from "@/lib/store";
 import { buildInitialPlan } from "@/lib/adaptiveCoach";
-import { DIAGNOSTIC_EXERCISE } from "@/lib/materials";
+import { getDiagnosticForLanguage } from "@/lib/materials";
 import {
   COACH_SKILL_LABELS,
   GOAL_OPTIONS,
@@ -44,7 +44,8 @@ export default function OnboardingFlow({
   isReassessment?: boolean;
   onCancel?: () => void;
 }) {
-  const { profile: existingProfile, completeOnboarding, toast } = useStore();
+  const { profile: existingProfile, practiceLanguage, completeOnboarding, toast } = useStore();
+  const diagEx = useMemo(() => getDiagnosticForLanguage(practiceLanguage), [practiceLanguage]);
   const [step, setStep] = useState<1 | 2 | 3 | 4>(isReassessment ? 2 : 1);
 
   const [name, setName] = useState(existingProfile.name);
@@ -328,13 +329,14 @@ export default function OnboardingFlow({
           }
         >
           <div className="grid gap-5">
-            <CoachedText exercise={DIAGNOSTIC_EXERCISE} compact />
+            <CoachedText exercise={diagEx} compact />
             <InlineRecorder
-              title="Initial Speaking Baseline"
+              title={practiceLanguage === "hi" ? "Hindi Speaking Baseline" : "Initial Speaking Baseline"}
               mode="diagnostic"
-              scriptText={DIAGNOSTIC_EXERCISE.plainText}
-              exerciseId={DIAGNOSTIC_EXERCISE.id}
-              targetWpm={DIAGNOSTIC_EXERCISE.targetWpm}
+              language={practiceLanguage}
+              scriptText={diagEx.plainText}
+              exerciseId={diagEx.id}
+              targetWpm={diagEx.targetWpm}
               saveLabel="Save Baseline & Generate My Plan →"
               compact
               onSaved={(rec, assessment) => {

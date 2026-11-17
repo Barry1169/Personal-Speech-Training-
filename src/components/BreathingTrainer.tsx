@@ -16,7 +16,7 @@ const PHASE_LABEL: Record<Phase, string> = {
 const PHASE_FREQ: Record<Phase, number> = { inhale: 520, hold: 660, exhale: 440 };
 
 export default function BreathingTrainer() {
-  const { settings, setSettings, addLog, toast } = useStore();
+  const { practiceLanguage, settings, setSettings, addLog, toast } = useStore();
   const [pat, setPat] = useState(settings.breathing);
   const [state, setState] = useState<State>("idle");
   const [phase, setPhase] = useState<Phase>("inhale");
@@ -120,6 +120,7 @@ export default function BreathingTrainer() {
   const stop = () => {
     if (elapsed >= 20) {
       addLog({
+        language: practiceLanguage,
         seconds: elapsed,
         mode: "breathing",
         completed: Math.max(1, cycle),

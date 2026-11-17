@@ -1,10 +1,12 @@
 import {
   SOUND_CATEGORY_LABELS,
   dateKey,
+  langOf,
   uid,
   type BeforeAfterComparison,
   type CoachedExercise,
   type PersonalWord,
+  type PracticeLanguage,
   type Recording,
   type SoundCategoryKey,
   type WeakComboFinding,
@@ -13,6 +15,7 @@ import {
   type WordMouthGuide,
   type WordStatus,
 } from "./types";
+import { hasDevanagari } from "./analytics";
 import { getRecordingAssessment } from "./adaptiveCoach";
 
 interface LexiconEntry {
@@ -623,11 +626,182 @@ const CURATED_LEXICON: Record<string, LexiconEntry> = {
   },
 };
 
+const CURATED_HINDI_LEXICON: Record<string, LexiconEntry> = {
+  "प्रयत्न": {
+    phonetic: "pra-YAT-na",
+    ipa: "/prə.jət.nə/",
+    meaning: "Effort, attempt, or dedicated endeavor.",
+    example: "रोज़ का छोटा प्रयत्न भी समय के साथ बड़ा बदलाव लाता है।",
+    sounds: ["samyuktakshar", "dantya"],
+  },
+  "स्पष्ट": {
+    phonetic: "SPASHT",
+    ipa: "/spəʂʈ/",
+    meaning: "Clear, crisp, unambiguous, and articulate.",
+    example: "हर शब्द को स्पष्ट बोलना ही प्रभावी संवाद की पहली सीढ़ी है।",
+    sounds: ["samyuktakshar", "sibilants_hi", "murdhanya"],
+  },
+  "विश्वास": {
+    phonetic: "vish-VAAS",
+    ipa: "/ʋɪʃ.ʋɑːs/",
+    meaning: "Trust, belief, or quiet self-confidence.",
+    example: "शांत मन और गहरी साँस से आवाज़ में विश्वास आता है।",
+    sounds: ["sibilants_hi", "samyuktakshar"],
+  },
+  "आत्मविश्वास": {
+    phonetic: "aat-ma-vish-VAAS",
+    ipa: "/ɑːt.mə.ʋɪʃ.ʋɑːs/",
+    meaning: "Self-confidence and inner composure.",
+    example: "आत्मविश्वास शांत तैयारी और नियमित अभ्यास से बनता है।",
+    sounds: ["samyuktakshar", "dantya", "sibilants_hi"],
+  },
+  "धैर्य": {
+    phonetic: "DHAIR-ya",
+    ipa: "/d̪ʱɛːr.jə/",
+    meaning: "Patience, calmness, and steady composure.",
+    example: "थोड़े धैर्य और सही अभ्यास से संवाद सहज बन जाता है।",
+    sounds: ["mahaprana", "dantya", "samyuktakshar"],
+  },
+  "उदाहरण": {
+    phonetic: "u-DAA-ha-ran",
+    ipa: "/ʊ.d̪ɑː.ɦə.rəɳ/",
+    meaning: "An example or real-life illustration.",
+    example: "एक छोटा उदाहरण आपकी पूरी बात को आसान बना देता है।",
+    sounds: ["dantya", "murdhanya"],
+  },
+  "प्रभावशाली": {
+    phonetic: "pra-bhaav-SHAA-lee",
+    ipa: "/prə.bʱɑːʋ.ʃɑː.liː/",
+    meaning: "Impactful, persuasive, and effective.",
+    example: "स्पष्ट विचार किसी भी प्रस्तुति को प्रभावशाली बनाते हैं।",
+    sounds: ["samyuktakshar", "mahaprana", "sibilants_hi"],
+  },
+  "सफलता": {
+    phonetic: "sa-fal-TAA",
+    ipa: "/sə.pʰəl.t̪ɑː/",
+    meaning: "Success and achievement.",
+    example: "धैर्य और निरंतर अभ्यास ही सच्ची सफलता की कुंजी है।",
+    sounds: ["sibilants_hi", "mahaprana", "dantya"],
+  },
+  "दृष्टिकोण": {
+    phonetic: "drish-ti-KON",
+    ipa: "/d̪rɪʂ.ʈɪ.koːɳ/",
+    meaning: "Perspective, viewpoint, or angle.",
+    example: "एक शांत ठहराव पूरी बात का दृष्टिकोण बदल सकता है।",
+    sounds: ["samyuktakshar", "sibilants_hi", "murdhanya"],
+  },
+  "प्रस्तुति": {
+    phonetic: "pras-TU-ti",
+    ipa: "/prəs.t̪ʊ.t̪ɪ/",
+    meaning: "Presentation or delivery.",
+    example: "संतुलित गति से आपकी प्रस्तुति अधिक आकर्षक लगती है।",
+    sounds: ["samyuktakshar", "dantya", "sibilants_hi"],
+  },
+  "संवाद": {
+    phonetic: "sam-VAAD",
+    ipa: "/sə̃ʋ.ʋɑːd̪/",
+    meaning: "Dialogue, conversation, or communication.",
+    example: "सच्चा संवाद सुनने और स्पष्ट बोलने से बनता है।",
+    sounds: ["anusvara", "sibilants_hi", "dantya"],
+  },
+  "कठिनाई": {
+    phonetic: "ka-thi-NAA-ee",
+    ipa: "/kə.ʈʰɪ.nɑː.iː/",
+    meaning: "Difficulty or challenge.",
+    example: "शांत साँस से हर कठिनाई आसान लगने लगती है।",
+    sounds: ["murdhanya", "mahaprana"],
+  },
+  "अनुभव": {
+    phonetic: "a-nu-BHAV",
+    ipa: "/ə.nʊ.bʱəʋ/",
+    meaning: "Experience or lived insight.",
+    example: "हर नया अनुभव मुझे और अधिक सहज बनाता है।",
+    sounds: ["mahaprana", "dantya"],
+  },
+  "श्रृंखला": {
+    phonetic: "shrin-KHA-laa",
+    ipa: "/ʃrɪŋ.kʰə.lɑː/",
+    meaning: "Series, chain, or structured sequence.",
+    example: "विचारों की स्पष्ट श्रृंखला दर्शकों को जोड़े रखती है।",
+    sounds: ["samyuktakshar", "sibilants_hi", "mahaprana", "anusvara"],
+  },
+  "विशेषता": {
+    phonetic: "vi-SHESH-taa",
+    ipa: "/ʋɪ.ʃeːʂ.t̪ɑː/",
+    meaning: "Specialty, distinct quality, or feature.",
+    example: "शांत आवाज़ एक अच्छे वक्ता की सबसे बड़ी विशेषता है।",
+    sounds: ["sibilants_hi", "dantya"],
+  },
+  "व्यवस्थित": {
+    phonetic: "vya-vas-THIT",
+    ipa: "/ʋjə.ʋəs.t̪ʰɪt̪/",
+    meaning: "Organized, well-structured, and systematic.",
+    example: "व्यवस्थित तरीके से बोलने पर घबराहट अपने आप घटती है।",
+    sounds: ["samyuktakshar", "mahaprana", "dantya"],
+  },
+  "साक्षात्कार": {
+    phonetic: "saak-shaat-KAAR",
+    ipa: "/sɑːk.ʂɑːt̪.kɑːr/",
+    meaning: "Interview or formal conversation.",
+    example: "साक्षात्कार में धीमी गति और स्पष्ट उच्चारण सबसे ज़्यादा मदद करते हैं।",
+    sounds: ["samyuktakshar", "sibilants_hi", "dantya"],
+  },
+  "कृतज्ञ": {
+    phonetic: "kri-TAG-ya",
+    ipa: "/krɪ.t̪əɡ.jə/",
+    meaning: "Grateful or thankful.",
+    example: "मैं आपके समय और सहयोग के लिए कृतज्ञ हूँ।",
+    sounds: ["samyuktakshar", "dantya"],
+  },
+  "संपूर्ण": {
+    phonetic: "sam-POORN",
+    ipa: "/səm.puːrɳ/",
+    meaning: "Complete, whole, or thorough.",
+    example: "संपूर्ण ध्यान के साथ दस मिनट का अभ्यास काफी होता है।",
+    sounds: ["anusvara", "murdhanya", "samyuktakshar"],
+  },
+  "नियंत्रण": {
+    phonetic: "ni-YAN-tran",
+    ipa: "/nɪ.jən.t̪rəɳ/",
+    meaning: "Control, steadiness, or self-mastery.",
+    example: "धीमी गति हमें शब्दों पर पूरा नियंत्रण देती है।",
+    sounds: ["anusvara", "samyuktakshar", "murdhanya"],
+  },
+  "संतुलन": {
+    phonetic: "san-TU-lan",
+    ipa: "/sən.t̪ʊ.lən/",
+    meaning: "Balance and harmony.",
+    example: "आवाज़ में संतुलन होने से हर बात वज़नदार लगती है।",
+    sounds: ["anusvara", "dantya", "sibilants_hi"],
+  },
+  "अभ्यास": {
+    phonetic: "ab-HYAAS",
+    ipa: "/əbʱ.jɑːs/",
+    meaning: "Practice, training, or daily craft.",
+    example: "नियमित अभ्यास से हिंदी उच्चारण अत्यंत स्पष्ट हो जाता है।",
+    sounds: ["mahaprana", "samyuktakshar", "sibilants_hi"],
+  },
+  "ठहराव": {
+    phonetic: "theh-RAAV",
+    ipa: "/ʈʰɛɦ.rɑːʋ/",
+    meaning: "Deliberate pause, poise, or grounded stillness.",
+    example: "एक छोटा ठहराव आपकी पूरी बात को प्रभावशाली बना देता है।",
+    sounds: ["murdhanya", "mahaprana"],
+  },
+  "प्रवाह": {
+    phonetic: "pra-VAAH",
+    ipa: "/prə.ʋɑːɦ/",
+    meaning: "Smooth flow or fluency.",
+    example: "शांत साँस के साथ बोलने से आवाज़ में सहज प्रवाह आता है।",
+    sounds: ["samyuktakshar"],
+  },
+};
+
 export function normalizeWord(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
-    .replace(/^[^a-z]+|[^a-z'-]+$/g, "")
+    .replace(/^[^\p{L}\p{M}]+|[^\p{L}\p{M}'-]+$/gu, "")
     .replace(/\s+/g, " ");
 }
 
@@ -638,12 +812,24 @@ export function displayWordCase(raw: string): string {
 }
 
 /**
- * Detects recurring English articulation categories present in a word.
+ * Detects recurring English or Hindi articulation categories present in a word.
  */
-export function detectSoundCategories(word: string): SoundCategoryKey[] {
+export function detectSoundCategories(word: string, language?: PracticeLanguage): SoundCategoryKey[] {
   const w = normalizeWord(word);
   if (!w) return ["vowels"];
+  const isHindi = language === "hi" || hasDevanagari(w);
   const found = new Set<SoundCategoryKey>();
+
+  if (isHindi) {
+    if (/[\u094D]/.test(w) || /(क्ष|त्र|ज्ञ|श्र)/.test(w)) found.add("samyuktakshar");
+    if (/[खघछझठढथधफभ]/.test(w) || /(kh|gh|chh|jh|th|dh|ph|bh)/.test(w)) found.add("mahaprana");
+    if (/[टठडढणड़ढ़]/.test(w)) found.add("murdhanya");
+    if (/[तथदध]/.test(w)) found.add("dantya");
+    if (/[शषस]/.test(w) || /(sh|s)/.test(w)) found.add("sibilants_hi");
+    if (/[ंँ]/.test(w) || /(an|am|ng)/.test(w)) found.add("anusvara");
+    if (found.size === 0) found.add("vowels");
+    return [...found];
+  }
 
   if (/th/.test(w)) found.add("th");
   if (/r/.test(w)) found.add("r");
@@ -709,7 +895,73 @@ const SOUND_PLACEMENT_CUES: Record<SoundCategoryKey, WordMouthGuide> = {
     lips: "Open your mouth comfortably on stressed open vowels (ah/oh/aw) and spread lightly on front vowels (ee/ay).",
     mouthAirflow: "Keep an open throat, dropped jaw, and smooth forward resonance across multi-syllable words.",
   },
+  mahaprana: {
+    tongue: "Make light, relaxed contact at the consonant's place of articulation — never clamp your tongue or throat tightly.",
+    lips: "Keep lips relaxed and ready to release smoothly into the following vowel.",
+    mouthAirflow: "Release a clear, gentle puff of warm breath right after the consonant (feel air on your hand for ख, घ, थ, ध, फ, भ).",
+  },
+  murdhanya: {
+    tongue: "Curl the front tip of your tongue gently upward and slightly back toward the hard palate (roof of mouth) for ट, ठ, ड, ढ, ण, ड़, ढ़.",
+    lips: "Keep lips neutral and slightly open so the curled tongue tip has room to tap cleanly.",
+    mouthAirflow: "Use a light, quick tap instead of heavy pressure so retroflex sounds stay crisp and never block.",
+  },
+  dantya: {
+    tongue: "Touch the flat tongue tip lightly against the back edge of your upper front teeth for soft Hindi त, थ, द, ध (not curled back like English T/D).",
+    lips: "Keep lips relaxed and slightly parted.",
+    mouthAirflow: "Glide cleanly from the light dental touch straight into the following vowel matra.",
+  },
+  sibilants_hi: {
+    tongue: "Separate palatal 'श/ष' (mid-tongue lifted softly toward the palate for a warm hush) from clean dental 'स' (tip right behind upper teeth).",
+    lips: "Slightly round lips forward on 'श/ष', and keep lips gently spread for crisp 'स'.",
+    mouthAirflow: "Let steady, smooth friction air flow without biting down or forcing harsh hissing.",
+  },
+  samyuktakshar: {
+    tongue: "Move smoothly from the half-consonant into the full consonant at 0.75× speed first without dropping either letter.",
+    lips: "Keep jaw loose and transition lip shapes continuously without inserting an extra 'uh' vowel in the middle.",
+    mouthAirflow: "Keep one calm ribbon of breath flowing right through the conjunct (क्ष, त्र, ज्ञ, श्र, प्र, स्त).",
+  },
+  anusvara: {
+    tongue: "Let your tongue prepare naturally for the following consonant while relaxing the soft palate slightly.",
+    lips: "Keep lips soft and open for nasalized vowels (अँ) without pinching.",
+    mouthAirflow: "Allow gentle resonance through both nose and mouth so nasalization sounds warm and effortless.",
+  },
 };
+
+const DEVANAGARI_ROMAN_MAP: Record<string, string> = {
+  अ: "a", आ: "aa", इ: "i", ई: "ee", उ: "u", ऊ: "oo", ऋ: "ri", ए: "e", ऐ: "ai", ओ: "o", औ: "au",
+  क: "ka", ख: "kha", ग: "ga", घ: "gha", ङ: "nga",
+  च: "cha", छ: "chha", ज: "ja", झ: "jha", ञ: "nya",
+  ट: "ta", ठ: "tha", ड: "da", ढ: "dha", ण: "na", ड़: "ra", ढ़: "rha",
+  त: "ta", थ: "tha", द: "da", ध: "dha", न: "na",
+  प: "pa", फ: "pha", ब: "ba", भ: "bha", म: "ma",
+  य: "ya", र: "ra", ल: "la", व: "va", श: "sha", ष: "sha", स: "sa", ह: "ha",
+  "ा": "aa", "ि": "i", "ी": "ee", "ु": "u", "ू": "oo", "ृ": "ri", "े": "e", "ै": "ai", "ो": "o", "ौ": "au",
+  "ं": "n", "ँ": "n", "ः": "h",
+};
+
+function transliterateDevanagariRough(word: string): string {
+  const chars = [...word];
+  let out = "";
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    const next = chars[i + 1];
+    if (ch === "\u094D") continue; // halant suppresses inherent 'a'
+    const mapped = DEVANAGARI_ROMAN_MAP[ch];
+    if (!mapped) {
+      out += ch;
+      continue;
+    }
+    const isConsonant = mapped.endsWith("a") && mapped.length >= 2 && !/[aeiou]/.test(mapped[0]);
+    if (isConsonant && next && (next === "\u094D" || "ािीुूृेैोौ".includes(next))) {
+      out += mapped.slice(0, -1);
+    } else if (isConsonant && i === chars.length - 1 && chars.length > 2) {
+      out += mapped.slice(0, -1); // schwa deletion at word end in modern Hindi
+    } else {
+      out += mapped;
+    }
+  }
+  return out || word;
+}
 
 function splitSimpleSyllables(word: string): string[] {
   const clean = normalizeWord(word).replace(/[^a-z]/g, "");
@@ -765,11 +1017,15 @@ function estimatePhoneticAndIpa(word: string): { phonetic: string; ipa: string }
 
 /**
  * Builds complete pronunciation metadata (phonetics, IPA, meaning, example sentence,
- * anatomical mouth guide, and sound categories) for any word.
+ * anatomical mouth guide, and sound categories) for any English or Hindi word.
  */
-export function analyzeWordEntry(rawWord: string): {
+export function analyzeWordEntry(
+  rawWord: string,
+  language?: PracticeLanguage
+): {
   word: string;
   normalized: string;
+  language: PracticeLanguage;
   phonetic: string;
   ipa: string;
   ipaSource: "dictionary" | "estimated";
@@ -780,8 +1036,12 @@ export function analyzeWordEntry(rawWord: string): {
 } {
   const display = displayWordCase(rawWord);
   const normalized = normalizeWord(rawWord);
-  const lex = CURATED_LEXICON[normalized];
-  const sounds = lex?.sounds ?? detectSoundCategories(normalized);
+  const resolvedLang: PracticeLanguage = language ?? (hasDevanagari(display) ? "hi" : "en");
+  const lex =
+    resolvedLang === "hi"
+      ? CURATED_HINDI_LEXICON[normalized] ?? CURATED_HINDI_LEXICON[display]
+      : CURATED_LEXICON[normalized];
+  const sounds = lex?.sounds ?? detectSoundCategories(normalized, resolvedLang);
   const primarySound = sounds[0] ?? "vowels";
   const baseGuide = SOUND_PLACEMENT_CUES[primarySound];
 
@@ -789,6 +1049,7 @@ export function analyzeWordEntry(rawWord: string): {
     return {
       word: display,
       normalized,
+      language: resolvedLang,
       phonetic: lex.phonetic,
       ipa: lex.ipa,
       ipaSource: "dictionary",
@@ -803,11 +1064,36 @@ export function analyzeWordEntry(rawWord: string): {
     };
   }
 
+  if (resolvedLang === "hi") {
+    const roman = hasDevanagari(display) ? transliterateDevanagariRough(display) : display;
+    const est = estimatePhoneticAndIpa(roman);
+    const soundNames = sounds.slice(0, 2).map((s) => SOUND_CATEGORY_LABELS[s].short).join(" & ");
+    return {
+      word: display,
+      normalized,
+      language: "hi",
+      phonetic: roman || display,
+      ipa: est.ipa,
+      ipaSource: "estimated",
+      meaning: `Hindi focus word targeting ${soundNames || "clear Hindi articulation"} (click Edit anytime to add your own meaning).`,
+      exampleSentence: hasDevanagari(display)
+        ? `शांत साँस लेकर "${display}" शब्द को स्पष्ट और सहज स्वर में बोलिए।`
+        : `Take a calm breath and say "${display}" clearly inside a natural Hindi sentence.`,
+      mouthGuide: {
+        tongue: baseGuide.tongue,
+        lips: baseGuide.lips,
+        mouthAirflow: baseGuide.mouthAirflow,
+      },
+      soundTags: sounds,
+    };
+  }
+
   const est = estimatePhoneticAndIpa(display);
   const soundNames = sounds.slice(0, 2).map((s) => SOUND_CATEGORY_LABELS[s].short).join(" & ");
   return {
     word: display,
     normalized,
+    language: "en",
     phonetic: est.phonetic,
     ipa: est.ipa,
     ipaSource: "estimated",
@@ -825,6 +1111,7 @@ export function analyzeWordEntry(rawWord: string): {
 export function createPersonalWord(
   rawWord: string,
   opts?: {
+    language?: PracticeLanguage;
     status?: WordStatus;
     source?: PersonalWord["source"];
     phonetic?: string;
@@ -835,12 +1122,13 @@ export function createPersonalWord(
     mouthGuide?: Partial<WordMouthGuide>;
   }
 ): PersonalWord {
-  const analyzed = analyzeWordEntry(rawWord);
+  const analyzed = analyzeWordEntry(rawWord, opts?.language);
   const now = Date.now();
   return {
     id: uid(),
     word: analyzed.word,
     normalized: analyzed.normalized,
+    language: analyzed.language,
     status: opts?.status ?? "difficult",
     phonetic: opts?.phonetic?.trim() || analyzed.phonetic,
     ipa: opts?.ipa?.trim() || analyzed.ipa,
@@ -910,7 +1198,7 @@ export function evaluateWordAttempt(params: {
   const cleanTranscript = transcript.trim();
   const tokens = cleanTranscript
     .toLowerCase()
-    .replace(/[^a-z'\s-]/g, " ")
+    .replace(/[^\p{L}\p{M}\p{N}'\s-]/gu, " ")
     .split(/\s+/)
     .filter(Boolean);
 
@@ -1150,12 +1438,23 @@ const SOUND_TO_EXERCISE_IDS: Record<SoundCategoryKey, string[]> = {
   clusters: ["cm-tt-adv-1", "cm-sent-adv-1", "cm-para-int-1"],
   endings: ["cm-sent-beg-1", "cm-para-beg-1", "cm-sent-adv-1"],
   vowels: ["cm-para-beg-1", "cm-fluency-rate-anchor", "cm-pass-beg-1"],
+  // Hindi verified CoachedExercise IDs
+  mahaprana: ["cm-hi-tt-beg-1", "cm-hi-fluency-onset", "cm-hi-sent-beg-1"],
+  murdhanya: ["cm-hi-tt-int-1", "cm-hi-sent-beg-1", "cm-hi-para-beg-1"],
+  dantya: ["cm-hi-tt-int-1", "cm-hi-sent-beg-1", "cm-hi-para-beg-1"],
+  sibilants_hi: ["cm-hi-tt-beg-1", "cm-hi-tt-adv-1", "cm-hi-sent-beg-1"],
+  samyuktakshar: ["cm-hi-tt-adv-1", "cm-hi-sent-beg-1", "cm-hi-para-adv-1"],
+  anusvara: ["cm-hi-sent-beg-1", "cm-hi-para-beg-1", "cm-hi-pass-int-1"],
 };
 
 export function detectWeakSounds(
   words: PersonalWord[],
-  recordings: Recording[]
+  recordings: Recording[],
+  language?: PracticeLanguage
 ): { weakSounds: WeakSoundFinding[]; weakCombos: WeakComboFinding[] } {
+  const scopedWords = language ? words.filter((w) => langOf(w) === language) : words;
+  const scopedRecordings = language ? recordings.filter((r) => langOf(r) === language) : recordings;
+  const isHindi = language === "hi";
   const stats = new Map<
     SoundCategoryKey,
     { weight: number; accScores: number[]; sampleWords: Set<string> }
@@ -1170,7 +1469,7 @@ export function detectWeakSounds(
   };
 
   // 1. Evidence from Personal Word Bank
-  for (const w of words) {
+  for (const w of scopedWords) {
     if (w.status === "mastered" && w.masteryScore >= 85) continue;
     const baseWeight = w.status === "difficult" ? 3 : 2;
     const acc = w.attempts.length > 0 ? w.masteryScore : undefined;
@@ -1181,14 +1480,14 @@ export function detectWeakSounds(
 
   // 2. Evidence from recurring missed/mumbled words across Recordings
   const allProblemWords: string[] = [];
-  for (const rec of recordings.slice(0, 25)) {
+  for (const rec of scopedRecordings.slice(0, 25)) {
     const a = getRecordingAssessment(rec);
     for (const pw of a.problemWords) {
       if (pw.kind === "missing" || pw.kind === "repeated") {
         const norm = normalizeWord(pw.word);
-        if (norm.length >= 3) {
+        if (norm.length >= 2) {
           allProblemWords.push(norm);
-          const cats = detectSoundCategories(norm);
+          const cats = detectSoundCategories(norm, language ?? langOf(rec));
           for (const c of cats) touch(c, 1.5, norm);
         }
       }
@@ -1209,6 +1508,10 @@ export function detectWeakSounds(
           : "watch";
       const meta = SOUND_CATEGORY_LABELS[sound];
       const guide = SOUND_PLACEMENT_CUES[sound];
+      const recommendedExerciseIds =
+        sound === "vowels" && isHindi
+          ? ["cm-hi-sent-beg-1", "cm-hi-para-beg-1", "cm-hi-pass-int-1"]
+          : SOUND_TO_EXERCISE_IDS[sound];
       return {
         sound,
         label: meta.label,
@@ -1219,7 +1522,7 @@ export function detectWeakSounds(
         severity,
         sampleWords: [...data.sampleWords].slice(0, 5),
         placementCue: guide.tongue,
-        recommendedExerciseIds: SOUND_TO_EXERCISE_IDS[sound],
+        recommendedExerciseIds,
       };
     })
     .sort((a, b) => b.issueCount - a.issueCount)
@@ -1227,48 +1530,78 @@ export function detectWeakSounds(
 
   // 3. Detect problematic sound combinations across saved difficult/learning words & missed words
   const wordPool = [
-    ...words.filter((w) => w.status !== "mastered").map((w) => w.normalized),
+    ...scopedWords.filter((w) => w.status !== "mastered").map((w) => w.normalized),
     ...allProblemWords,
   ];
   const uniquePool = [...new Set(wordPool)];
 
-  const comboChecks: { key: string; label: string; regex: RegExp; tip: string }[] = [
-    {
-      key: "th_r",
-      label: "TH + R transitions (thr- / th…r)",
-      regex: /thr|th.*r/,
-      tip: "Start with tongue tip lightly between teeth for TH, then smoothly retract and round lips into R without inserting an extra vowel.",
-    },
-    {
-      key: "r_l",
-      label: "R ↔ L rapid switching (rl / l…r)",
-      regex: /(r.*l|l.*r)/,
-      tip: "Exaggerate the contrast slowly: bunched tongue + light lip rounding for R, then crisp tongue-tip lift behind upper teeth for L.",
-    },
-    {
-      key: "str_scr",
-      label: "Triple consonant starts (str- / scr- / spr-)",
-      regex: /(str|scr|spr|spl)/,
-      tip: "Glide smoothly from S into the plosive and liquid on one continuous stream of air at 0.75× speed before speeding up.",
-    },
-    {
-      key: "s_sh_mix",
-      label: "S ↔ SH / CH sibilant switches",
-      regex: /(s.*sh|sh.*s|s.*ch|ch.*s)/,
-      tip: "Spread lips lightly for /s/ and protrude/round lips slightly forward for /ʃ/ (SH) so they never blur together.",
-    },
-    {
-      key: "final_clusters",
-      label: "Dense word-ending clusters (-ths / -sts / -rld / -sks)",
-      regex: /(ths|sts|rld|sks|kts|pts|nds)$/,
-      tip: "Slow down by 15% on the final syllable and give each ending consonant a light, audible tap instead of dropping the tail.",
-    },
-  ];
+  const comboChecks: { key: string; label: string; regex: RegExp; tip: string }[] = isHindi
+    ? [
+        {
+          key: "hi_samyukt_sibilant",
+          label: "Hindi Conjunct + Sibilant clusters (स्प / श्व / ष्ट / श्र)",
+          regex: /(स्प|श्व|ष्ट|श्र|स्त|क्ष)/,
+          tip: "Slow down to 0.75× and let continuous breath glide through the half-letter and sibilant without tensing your tongue.",
+        },
+        {
+          key: "hi_retroflex_dental",
+          label: "Retroflex ↔ Dental transitions (ट/ड/ण ↔ त/द)",
+          regex: /([टठडढणड़ढ़].*[तथदध]|[तथदध].*[टठडढणड़ढ़])/,
+          tip: "Contrast curled-back tongue tip (ट/ड/ण) cleanly against soft behind-the-teeth touch (त/द) at slow speed first.",
+        },
+        {
+          key: "hi_mahaprana_cluster",
+          label: "Aspirated Mahaprana + Conjunct (प्रभ / धैर्य / अभ्यास)",
+          regex: /([\u094D].*[खघछझठढथधफभ]|[खघछझठढथधफभ].*[\u094D])/,
+          tip: "Use a light touch and release a soft, unforced puff of air on the aspirated letter instead of squeezing your throat.",
+        },
+        {
+          key: "hi_sh_s",
+          label: "Hindi श / ष ↔ स Sibilant switches",
+          regex: /([शष].*स|स.*[शष])/,
+          tip: "Keep lips slightly rounded for warm palatal श/ष, then gently spread for crisp dental स.",
+        },
+      ]
+    : [
+        {
+          key: "th_r",
+          label: "TH + R transitions (thr- / th…r)",
+          regex: /thr|th.*r/,
+          tip: "Start with tongue tip lightly between teeth for TH, then smoothly retract and round lips into R without inserting an extra vowel.",
+        },
+        {
+          key: "r_l",
+          label: "R ↔ L rapid switching (rl / l…r)",
+          regex: /(r.*l|l.*r)/,
+          tip: "Exaggerate the contrast slowly: bunched tongue + light lip rounding for R, then crisp tongue-tip lift behind upper teeth for L.",
+        },
+        {
+          key: "str_scr",
+          label: "Triple consonant starts (str- / scr- / spr-)",
+          regex: /(str|scr|spr|spl)/,
+          tip: "Glide smoothly from S into the plosive and liquid on one continuous stream of air at 0.75× speed before speeding up.",
+        },
+        {
+          key: "s_sh_mix",
+          label: "S ↔ SH / CH sibilant switches",
+          regex: /(s.*sh|sh.*s|s.*ch|ch.*s)/,
+          tip: "Spread lips lightly for /s/ and protrude/round lips slightly forward for /ʃ/ (SH) so they never blur together.",
+        },
+        {
+          key: "final_clusters",
+          label: "Dense word-ending clusters (-ths / -sts / -rld / -sks)",
+          regex: /(ths|sts|rld|sks|kts|pts|nds)$/,
+          tip: "Slow down by 15% on the final syllable and give each ending consonant a light, audible tap instead of dropping the tail.",
+        },
+      ];
 
   const weakCombos: WeakComboFinding[] = [];
   for (const c of comboChecks) {
     const matches = uniquePool.filter((w) => c.regex.test(w));
-    if (matches.length >= 1 && (matches.length >= 2 || words.some((pw) => pw.status === "difficult" && c.regex.test(pw.normalized)))) {
+    if (
+      matches.length >= 1 &&
+      (matches.length >= 2 || scopedWords.some((pw) => pw.status === "difficult" && c.regex.test(pw.normalized)))
+    ) {
       weakCombos.push({
         comboKey: c.key,
         label: c.label,
@@ -1420,26 +1753,61 @@ function capFirst(s: string): string {
 
 export function generateCustomWordDrillContent(
   words: PersonalWord[],
-  seed: number = 0
+  seed: number = 0,
+  language: PracticeLanguage = "en"
 ): {
   targetWords: PersonalWord[];
   sentences: string[];
   paragraph: string;
   annotatedParagraph: string;
+  romanizedParagraph?: string;
 } {
-  const priority = words
+  const scoped = words.filter((w) => langOf(w) === language);
+  const priority = scoped
     .filter((w) => w.status !== "mastered")
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === "difficult" ? -1 : 1;
       return a.masteryScore - b.masteryScore;
     });
-  const pool = priority.length > 0 ? priority : words;
+  const pool = priority.length > 0 ? priority : scoped;
   if (pool.length === 0) {
     return { targetWords: [], sentences: [], paragraph: "", annotatedParagraph: "" };
   }
 
   // Rotate deterministically by seed while picking up to 5 words
   const rotated = [...pool.slice(seed % pool.length), ...pool.slice(0, seed % pool.length)].slice(0, 5);
+
+  if (language === "hi") {
+    const sentences = rotated.map((w) => {
+      const ex = w.exampleSentence.trim();
+      if (ex.toLowerCase().includes(w.normalized)) return ex;
+      return `शांत साँस लेकर "${w.word}" शब्द को स्पष्ट और सहज स्वर में बोलिए।`;
+    });
+    const wList = rotated.map((w) => w.word);
+    const wAnn = rotated.map((w) => `**${w.word}**`);
+    const wPhon = rotated.map((w) => w.phonetic);
+
+    const joined = wList.join(", ");
+    const joinedAnn = wAnn.join(", | ");
+    const plain =
+      wList.length === 1
+        ? `आज मैं शांत गति से "${wList[0]}" शब्द का अभ्यास कर रहा हूँ। ${sentences[0]} जब मैं आराम से साँस लेकर बोलता हूँ, तो ${wList[0]} बिल्कुल स्पष्ट और सहज निकलता है।`
+        : `आज के हिंदी अभ्यास में मेरे मुख्य शब्द हैं: ${joined}। पहले ${wList[0]} पर ध्यान देते हैं: ${sentences[0]} अब उसी शांत प्रवाह से ${wList[1]} बोलें: ${sentences[1]} नियमित और धीमे अभ्यास से ${joined} जैसे शब्द बिल्कुल स्वाभाविक बन जाते हैं।`;
+    const annotated =
+      wList.length === 1
+        ? `∧ आज मैं शांत गति से | ${wAnn[0]} शब्द का अभ्यास कर रहा हूँ। ‖ ∧ ${sentences[0]} ‖ ∧ जब मैं आराम से साँस लेकर बोलता हूँ, | तो ${wAnn[0]} बिल्कुल स्पष्ट और सहज निकलता है। ‖`
+        : `∧ आज के हिंदी अभ्यास में | मेरे मुख्य शब्द हैं: ${joinedAnn}। ‖ ∧ पहले ${wAnn[0]} पर ध्यान देते हैं: | ${sentences[0]} ‖ ∧ अब उसी शांत प्रवाह से ${wAnn[1]} बोलें: | ${sentences[1]} ‖ ∧ नियमित और धीमे अभ्यास से | ${joinedAnn} जैसे शब्द बिल्कुल स्वाभाविक बन जाते हैं। ‖`;
+    const romanized = `Aaj ke Hindi abhyaas mein mere mukhya shabd hain: ${wPhon.join(", ")}. Pehle ${wPhon[0]} ko shaant saans ke saath spasht bolein, phir agle shabdon ko bina jaldbaazi ke natural gati mein jodein.`;
+
+    return {
+      targetWords: rotated,
+      sentences,
+      paragraph: plain,
+      annotatedParagraph: annotated,
+      romanizedParagraph: romanized,
+    };
+  }
+
   const sentences = rotated.map((w) => {
     const ex = w.exampleSentence.trim();
     if (ex.toLowerCase().includes(w.normalized)) return ex;
@@ -1490,13 +1858,15 @@ export function generateCustomWordDrillContent(
  */
 export function buildCustomWordCoachedExercise(
   words: PersonalWord[],
-  seed: number = 0
+  seed: number = 0,
+  language: PracticeLanguage = "en"
 ): CoachedExercise | null {
-  const due = getDueWords(words);
-  const sourcePool = due.length > 0 ? due : words.filter((w) => w.status !== "mastered");
+  const scoped = words.filter((w) => langOf(w) === language);
+  const due = getDueWords(scoped);
+  const sourcePool = due.length > 0 ? due : scoped.filter((w) => w.status !== "mastered");
   if (sourcePool.length === 0) return null;
 
-  const content = generateCustomWordDrillContent(sourcePool, seed);
+  const content = generateCustomWordDrillContent(sourcePool, seed, language);
   if (!content.paragraph) return null;
 
   const wordNames = content.targetWords.map((w) => w.word);
@@ -1505,17 +1875,18 @@ export function buildCustomWordCoachedExercise(
   const firstGuide = content.targetWords[0].mouthGuide;
 
   return {
-    id: `custom-word-drill-${dateKey()}`,
-    title: `My Word Bank Drill: ${wordNames.slice(0, 3).map(capFirst).join(", ")}${wordNames.length > 3 ? ` +${wordNames.length - 3}` : ""}`,
+    id: `custom-word-drill-${language}-${dateKey()}`,
+    language,
+    title: `${language === "hi" ? "My Hindi Word Bank Drill" : "My Word Bank Drill"}: ${wordNames.slice(0, 3).map(capFirst).join(", ")}${wordNames.length > 3 ? ` +${wordNames.length - 3}` : ""}`,
     materialType: "paragraph",
     difficulty: "beginner",
     skills: ["pronunciation", "clarity", "fluency"],
     durationSec: 150,
     reps: 2,
-    targetWpm: 112,
+    targetWpm: language === "hi" ? 108 : 112,
     category: "pronunciation",
-    whatToDo: `This custom paragraph was built directly from your saved Personal Word Bank (${wordNames.join(", ")}). Listen to the model at 0.75× first, then read aloud smoothly at ~112 WPM.`,
-    howToSpeak: `Focus on ${soundSummary || "clear consonant articulation"}. ${firstGuide.tongue} Keep your breath steady so your target words blend naturally into full sentences.`,
+    whatToDo: `This custom ${language === "hi" ? "Hindi" : "English"} paragraph was built directly from your saved Personal Word Bank (${wordNames.join(", ")}). Listen to the model at 0.75× first, then read aloud smoothly.`,
+    howToSpeak: `Focus on ${soundSummary || "clear articulation"}. ${firstGuide.tongue} Keep your breath steady so your target words blend naturally into full sentences.`,
     emphasisWords: wordNames,
     pauseNotes: "Take a quiet breath ∧ before each sentence and pause ‖ cleanly after each example so you never rush into your tricky words.",
     mistakesToAvoid: [
@@ -1525,5 +1896,6 @@ export function buildCustomWordCoachedExercise(
     ],
     annotatedText: content.annotatedParagraph,
     plainText: content.paragraph,
+    romanizedText: content.romanizedParagraph,
   };
 }

@@ -218,6 +218,7 @@ function CoachedExerciseCard({
 export default function TodayView({ nav }: { nav: (v: string) => void }) {
   const {
     nowMs,
+    practiceLanguage,
     settings,
     profile,
     coachPlan,
@@ -241,6 +242,7 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
     words,
     dueWords,
     weakSounds,
+    shadowItems,
   } = useStore();
 
   const [tab, setTab] = useState<"coach" | "curriculum">("coach");
@@ -306,15 +308,17 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
       allRecordings: recordings,
       profile,
       plan: coachPlan,
+      language: practiceLanguage,
     });
 
     addLog({
+      language: practiceLanguage,
       seconds,
       mode: "daily-coach",
       completed: completedList.length,
       scores: null,
       overallScore: debrief.avgOverallScore,
-      note: `Personalized Daily Session — ${todayPlan.focusLabel}`,
+      note: `Personalized Daily Session (${practiceLanguage === "hi" ? "Hindi" : "English"}) — ${todayPlan.focusLabel}`,
     });
     await saveDebrief(debrief, updatedPlan);
     setDebriefModal(debrief);
@@ -326,6 +330,7 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
   const finishCurriculumSession = () => {
     const seconds = Math.max(accum, curriculumDoneCount * 45);
     addLog({
+      language: practiceLanguage,
       seconds,
       mode: "daily",
       completed: curriculumDoneCount,
@@ -339,7 +344,7 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
   };
 
   const sendScript = (title: string, text: string) => {
-    setSettings({ task: { title, mode: "daily", script: text } });
+    setSettings({ task: { title, mode: "daily", language: practiceLanguage, script: text } });
     nav("record");
   };
 
@@ -348,7 +353,9 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
       task: {
         title: ex.title,
         mode: ex.materialType === "impromptu" ? "impromptu" : "daily-coach",
+        language: ex.language ?? practiceLanguage,
         script: ex.plainText,
+        romanizedText: ex.romanizedText,
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
@@ -378,6 +385,9 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
+              <Chip tone={practiceLanguage === "hi" ? "accent" : "brand"}>
+                {practiceLanguage === "hi" ? "Hindi Track · हिन्दी" : "English Track"}
+              </Chip>
               <Chip tone="brand">Level {coachPlan.adaptiveLevel} · {coachPlan.difficulty}</Chip>
               <Chip tone="accent">Focus: {todayPlan.focusLabel}</Chip>
               <Chip>Target {coachPlan.targetWpmMin}–{coachPlan.targetWpmMax} WPM</Chip>
@@ -385,7 +395,9 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
             </div>
 
             <h2 className="mt-2 font-display text-[22px] font-bold tracking-tight sm:text-[25px]">
-              {profile.name ? `Welcome back, ${profile.name}` : "Your Daily Speech Coaching Session"}
+              {profile.name
+                ? `Welcome back, ${profile.name} — ${practiceLanguage === "hi" ? "Hindi Coaching" : "English Coaching"}`
+                : `Your Daily ${practiceLanguage === "hi" ? "Hindi" : "English"} Speech Coaching Session`}
             </h2>
             <p className="mt-1 max-w-2xl text-[13px] leading-relaxed text-[var(--muted)]">
               {todayPlan.coachRationale}
@@ -398,6 +410,9 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
                 <path d="M3.5 2.5v9l7-4.5z" />
               </svg>
               Start Today&apos;s Training
+            </Btn>
+            <Btn variant="soft" onClick={() => nav("shadow")}>
+              Shadow a Speaker{shadowItems.length ? ` (${shadowItems.length})` : ""}
             </Btn>
             <Btn variant="ghost" onClick={() => nav("record")}>
               Quick Record

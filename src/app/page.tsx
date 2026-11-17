@@ -10,13 +10,14 @@ import LibraryView from "@/components/LibraryView";
 import ProgressView from "@/components/ProgressView";
 import DataView from "@/components/DataView";
 import WordBankView from "@/components/WordBankView";
+import ShadowView from "@/components/ShadowView";
 import AddWordModal from "@/components/AddWordModal";
 import WordPracticeModal from "@/components/WordPracticeModal";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import GuidedSessionModal from "@/components/GuidedSessionModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
-type View = "today" | "breathe" | "record" | "modes" | "words" | "library" | "progress" | "data";
+type View = "today" | "breathe" | "record" | "modes" | "words" | "shadow" | "library" | "progress" | "data";
 
 const NAV: { id: View; label: string; icon: React.ReactNode }[] = [
   {
@@ -46,6 +47,15 @@ const NAV: { id: View; label: string; icon: React.ReactNode }[] = [
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M2.5 3.5h10v7.5H6l-3.5 2V3.5z" />
         <path d="M5 6.5h5M5 8.8h3.2" />
+      </svg>
+    ),
+  },
+  {
+    id: "shadow",
+    label: "Shadow",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <path d="M2 8.5v-2M4.5 10.5v-6M7 12V3M9.5 9.5v-4M12 8.5v-2" />
       </svg>
     ),
   },
@@ -122,10 +132,13 @@ function Shell() {
   const [view, setView] = useState<View>("today");
   const {
     hydrated,
+    practiceLanguage,
+    setPracticeLanguage,
     profile,
     coachPlan,
     stats,
     dueWords,
+    shadowItems,
     backupDue,
     toasts,
     guidedOpen,
@@ -178,6 +191,11 @@ function Shell() {
                       {dueWords.length}
                     </span>
                   )}
+                  {n.id === "shadow" && shadowItems.length > 0 && (
+                    <span className="rounded-full bg-[var(--panel2)] px-1.5 py-0.2 text-[10px] font-bold text-[var(--muted)]">
+                      {shadowItems.length}
+                    </span>
+                  )}
                   {n.id === "data" && backupDue && <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />}
                 </button>
               ))}
@@ -185,6 +203,35 @@ function Shell() {
           )}
 
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/* Practice Language Toggle (English vs Hindi — separate progress!) */}
+            <div
+              className="inline-flex items-center rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-0.5"
+              title="Switch Practice Language — English and Hindi track completely separate progress, streaks, and Word Banks"
+            >
+              <button
+                type="button"
+                onClick={() => setPracticeLanguage("en")}
+                className={`rounded-lg px-2 py-1 text-[11px] font-bold transition ${
+                  practiceLanguage === "en"
+                    ? "bg-[var(--brand)] text-white shadow-xs"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                EN
+              </button>
+              <button
+                type="button"
+                onClick={() => setPracticeLanguage("hi")}
+                className={`rounded-lg px-2 py-1 text-[11px] font-bold transition ${
+                  practiceLanguage === "hi"
+                    ? "bg-[var(--brand)] text-white shadow-xs"
+                    : "text-[var(--muted)] hover:text-[var(--ink)]"
+                }`}
+              >
+                हिन्दी
+              </button>
+            </div>
+
             {!showOnboarding && (
               <>
                 <button
@@ -193,19 +240,19 @@ function Shell() {
                   className="btn btn-soft px-2.5 py-1.5 text-[12px]"
                   title="Add a difficult word to your Personal Word Bank"
                 >
-                  + Add My Word
+                  + Add Word
                 </button>
                 <button
-                  className="chip chip-brand hidden cursor-pointer lg:inline-flex"
+                  className="chip chip-brand hidden cursor-pointer xl:inline-flex"
                   onClick={() => nav("data")}
-                  title="Adaptive coaching level"
+                  title="Adaptive coaching level for active language"
                 >
                   Lvl {coachPlan.adaptiveLevel}
                 </button>
                 <button
                   className={`chip chip-accent cursor-pointer ${stats.currentStreak > 0 ? "streak-glow" : ""}`}
                   onClick={() => nav("progress")}
-                  title="Practice streak"
+                  title={`${practiceLanguage === "hi" ? "Hindi" : "English"} practice streak`}
                 >
                   <svg width="11" height="12" viewBox="0 0 12 14" fill="currentColor">
                     <path d="M6.5 0C7 2.5 9.5 3.5 10.5 5.5c1.2 2.4.3 5.5-2 6.9C7.5 13 6 14 6 14s-1.5-1-2.5-1.6C1.2 10.9.3 7.9 1.5 5.5 2.5 3.5 5 2.5 5.5 0h1z" />
@@ -233,33 +280,43 @@ function Shell() {
         ) : (
           <>
             <div className="mb-5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <h1 className="font-display text-[21px] font-bold tracking-tight">
-                {view === "today" && "Daily Training Dashboard"}
-                {view === "modes" && "Practice Studio"}
-                {view === "words" && "Personal Word Bank & Pronunciation Coach"}
-                {view === "record" && "Record & Assess"}
-                {view === "breathe" && "Breathing Trainer"}
-                {view === "library" && "Exercise Library"}
-                {view === "progress" && "Progress & Reports"}
-                {view === "data" && "Coach Profile & Local Data"}
-              </h1>
-              <p className="text-[12.5px] text-[var(--muted)]">
-                {view === "today" && "Your personalized daily coaching plan, streaks, difficult words, weaknesses, and 12-week curriculum."}
-                {view === "modes" && "All 7 coached practice material types with audio models — plus 5 training modes & 6 real-world scenarios."}
-                {view === "words" && "Save difficult words, practice slow & natural pronunciation with IPA & mouth cues, detect weak sounds, and track spaced-repetition mastery."}
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-display text-[21px] font-bold tracking-tight">
+                  {view === "today" && "Daily Training Dashboard"}
+                  {view === "modes" && "Practice Studio"}
+                  {view === "words" && "Personal Word Bank & Pronunciation Coach"}
+                  {view === "shadow" && "Speaker Shadowing Studio"}
+                  {view === "record" && "Record & Assess"}
+                  {view === "breathe" && "Breathing Trainer"}
+                  {view === "library" && "Exercise Library"}
+                  {view === "progress" && "Progress & Reports"}
+                  {view === "data" && "Coach Profile & Local Data"}
+                </h1>
+                {view !== "shadow" && view !== "breathe" && (
+                  <span className="chip chip-brand text-[11px]">
+                    {practiceLanguage === "hi" ? "Hindi Mode · हिन्दी (Separate Progress)" : "English Mode (Separate Progress)"}
+                  </span>
+                )}
+              </div>
+              <p className="w-full text-[12.5px] text-[var(--muted)]">
+                {view === "today" && "Your personalized daily coaching plan, streaks, difficult words, weaknesses, and curriculum."}
+                {view === "modes" && "All 7 coached practice material types in English or Hindi — plus 5 training modes & 6 real-world scenarios."}
+                {view === "words" && "Save difficult English or Hindi words, practice slow & natural pronunciation with IPA & mouth cues, detect weak sounds, and track spaced-repetition mastery."}
+                {view === "shadow" && "Upload any script + speaker audio recording (English or Hindi) and match their exact pace, pauses, emphasis, and pitch melody."}
                 {view === "record" && "Record, measure pace, fillers, pauses, volume, and vocal pitch (F0), and save tricky words straight into your Word Bank."}
                 {view === "breathe" && "Guided breath pacing to calm nerves and anchor vocal support before speaking."}
-                {view === "library" && "Your full drill bank: search, filter, favorite, hear audio models, and add custom exercises."}
-                {view === "progress" && "Score trends, training calendar, Before vs. After comparisons, weak sounds, milestones, and weekly/monthly reports."}
+                {view === "library" && "Your full drill bank: switch between English & Hindi coached exercises, favorite drills, hear audio models, and add custom exercises."}
+                {view === "progress" && "Separate English & Hindi score trends, streaks, training calendars, Before vs. After comparisons, weak sounds, and reports."}
                 {view === "data" && "Edit your coach profile, retake your baseline assessment, adjust settings, and export backups."}
               </p>
             </div>
-            <div key={view} className="animate-view">
+            <div key={`${view}-${practiceLanguage}`} className="animate-view">
               {view === "today" && <TodayView nav={nav} />}
               {view === "breathe" && <BreathingTrainer />}
               {view === "record" && <RecordView nav={nav} />}
               {view === "modes" && <ModesView nav={nav} />}
               {view === "words" && <WordBankView nav={nav} />}
+              {view === "shadow" && <ShadowView />}
               {view === "library" && <LibraryView nav={nav} />}
               {view === "progress" && <ProgressView />}
               {view === "data" && <DataView nav={nav} />}
@@ -276,12 +333,12 @@ function Shell() {
       {/* Mobile bottom nav */}
       {!showOnboarding && (
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_95%,transparent)] backdrop-blur md:hidden">
-          <div className="mx-auto grid max-w-[640px] grid-cols-8">
+          <div className="mx-auto flex max-w-[680px] overflow-x-auto">
             {NAV.map((n) => (
               <button
                 key={n.id}
                 onClick={() => nav(n.id)}
-                className={`flex flex-col items-center gap-0.5 py-2 text-[9px] font-semibold ${
+                className={`flex min-w-[60px] flex-1 flex-col items-center gap-0.5 py-2 text-[9.5px] font-semibold ${
                   view === n.id ? "text-[var(--brand)]" : "text-[var(--muted)]"
                 }`}
               >

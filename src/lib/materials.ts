@@ -1,4 +1,7 @@
-import type { CoachedExercise, PracticeMaterialType, Difficulty } from "./types";
+import type { CoachedExercise, PracticeLanguage, PracticeMaterialType, Difficulty } from "./types";
+import { DIAGNOSTIC_EXERCISE_HI, HINDI_COACHED_MATERIALS } from "./materialsHindi";
+
+export { DIAGNOSTIC_EXERCISE_HI, HINDI_COACHED_MATERIALS };
 
 /**
  * Calibrated ~72-word diagnostic reading passage for Initial Assessment.
@@ -849,19 +852,36 @@ export const COACHED_MATERIALS: CoachedExercise[] = [
   },
 ];
 
+export const ALL_COACHED_MATERIALS: CoachedExercise[] = [
+  ...COACHED_MATERIALS,
+  ...HINDI_COACHED_MATERIALS,
+];
+
+export function getMaterialsForLanguage(language: PracticeLanguage = "en"): CoachedExercise[] {
+  return language === "hi" ? HINDI_COACHED_MATERIALS : COACHED_MATERIALS;
+}
+
+export function getDiagnosticForLanguage(language: PracticeLanguage = "en"): CoachedExercise {
+  return language === "hi" ? DIAGNOSTIC_EXERCISE_HI : DIAGNOSTIC_EXERCISE;
+}
+
 export function getCoachedExerciseById(id: string): CoachedExercise | undefined {
   if (id === DIAGNOSTIC_EXERCISE.id) return DIAGNOSTIC_EXERCISE;
-  return COACHED_MATERIALS.find((m) => m.id === id);
+  if (id === DIAGNOSTIC_EXERCISE_HI.id) return DIAGNOSTIC_EXERCISE_HI;
+  return ALL_COACHED_MATERIALS.find((m) => m.id === id);
 }
 
-export function materialsByType(type: PracticeMaterialType): CoachedExercise[] {
-  return COACHED_MATERIALS.filter((m) => m.materialType === type);
+export function materialsByType(type: PracticeMaterialType, language: PracticeLanguage = "en"): CoachedExercise[] {
+  return getMaterialsForLanguage(language).filter((m) => m.materialType === type);
 }
 
-export function materialsByDifficulty(diff: Difficulty): CoachedExercise[] {
-  return COACHED_MATERIALS.filter((m) => m.difficulty === diff);
+export function materialsByDifficulty(diff: Difficulty, language: PracticeLanguage = "en"): CoachedExercise[] {
+  return getMaterialsForLanguage(language).filter((m) => m.difficulty === diff);
 }
 
-export function materialsByFocusTag(tag: "stammering" | "youtube"): CoachedExercise[] {
-  return COACHED_MATERIALS.filter((m) => m.focusTags?.includes(tag));
+export function materialsByFocusTag(
+  tag: "stammering" | "youtube",
+  language: PracticeLanguage = "en"
+): CoachedExercise[] {
+  return getMaterialsForLanguage(language).filter((m) => m.focusTags?.includes(tag));
 }

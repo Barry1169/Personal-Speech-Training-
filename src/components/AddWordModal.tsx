@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { analyzeWordEntry, normalizeWord } from "@/lib/pronunciation";
 import { speakSingle } from "@/lib/tts";
 import { useStore } from "@/lib/store";
-import { SOUND_CATEGORY_LABELS, type PersonalWord, type WordStatus } from "@/lib/types";
+import { SOUND_CATEGORY_LABELS, langOf, type PersonalWord, type WordStatus } from "@/lib/types";
 import { Btn, Chip, Field, Input, Modal, SectionLabel, Textarea } from "./ui";
 
 function AddWordForm({
@@ -18,11 +18,13 @@ function AddWordForm({
   editingWord: PersonalWord | null;
   onClose: () => void;
 }) {
-  const { settings, words, addWord, updateWord, setPracticeWordId } = useStore();
+  const { settings, practiceLanguage, words, addWord, updateWord, setPracticeWordId } = useStore();
+  const wordLang = editingWord ? langOf(editingWord) : practiceLanguage;
+  const preferredVoice = wordLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
 
   const initialPreview = useMemo(
-    () => (initialWord ? analyzeWordEntry(initialWord) : null),
-    [initialWord]
+    () => (initialWord ? analyzeWordEntry(initialWord, wordLang) : null),
+    [initialWord, wordLang]
   );
 
   const [wordText, setWordText] = useState(editingWord?.word ?? initialWord);
@@ -42,8 +44,8 @@ function AddWordForm({
 
   const liveAnalysis = useMemo(() => {
     const trimmed = wordText.trim();
-    return trimmed.length >= 2 ? analyzeWordEntry(trimmed) : null;
-  }, [wordText]);
+    return trimmed.length >= 2 ? analyzeWordEntry(trimmed, wordLang) : null;
+  }, [wordText, wordLang]);
 
   const duplicate = useMemo(() => {
     if (editingWord) return null;
@@ -55,7 +57,7 @@ function AddWordForm({
   const handleWordChange = (val: string) => {
     setWordText(val);
     if (!touchedCustom && val.trim().length >= 2) {
-      const a = analyzeWordEntry(val);
+      const a = analyzeWordEntry(val, wordLang);
       setPhonetic(a.phonetic);
       setIpa(a.ipa);
       setMeaning(a.meaning);
@@ -110,6 +112,7 @@ function AddWordForm({
     }
 
     const res = addWord(clean, {
+      language: wordLang,
       status,
       source,
       phonetic: phonetic.trim() || undefined,
@@ -138,7 +141,11 @@ function AddWordForm({
             autoFocus
             value={wordText}
             onChange={(e) => handleWordChange(e.target.value)}
-            placeholder="e.g. thorough, rural, literally, strategy, subscribe…"
+            placeholder={
+              wordLang === "hi"
+                ? "e.g. स्पष्ट, प्रयत्न, विश्वास, धैर्य, प्रभावशाली (Devanagari or Hinglish)…"
+                : "e.g. thorough, rural, literally, strategy, subscribe…"
+            }
           />
         </Field>
         <Field label="Category">
@@ -197,13 +204,13 @@ function AddWordForm({
             <div className="flex items-center gap-1.5">
               <Btn
                 variant="soft"
-                onClick={() => speakSingle(wordText.trim(), 0.72, settings.preferredVoice)}
+                onClick={() => speakSingle(wordText.trim(), 0.72, preferredVoice, wordLang)}
               >
                 Hear slow
               </Btn>
               <Btn
                 variant="ghost"
-                onClick={() => speakSingle(wordText.trim(), 1.0, settings.preferredVoice)}
+                onClick={() => speakSingle(wordText.trim(), 1.0, preferredVoice, wordLang)}
               >
                 Natural
               </Btn>

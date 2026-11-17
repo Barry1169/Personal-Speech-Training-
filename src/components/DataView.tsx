@@ -2,12 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
+import { listVoices, hasNativeVoice } from "@/lib/tts";
 import { COACH_SKILL_LABELS, GOAL_OPTIONS, fmtDur } from "@/lib/types";
-import { Btn, Card, Chip, Field, Input, Modal } from "./ui";
+import { Btn, Card, Chip, Field, Input, Modal, Select } from "./ui";
 
 export default function DataView({ nav }: { nav: (v: string) => void }) {
   const {
     nowMs,
+    practiceLanguage,
+    setPracticeLanguage,
+    langSummaries,
     settings,
     profile,
     coachPlan,
@@ -16,12 +20,12 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
     exportJSON,
     importJSON,
     clearAllData,
-    stats,
-    recordings,
+    allRecordings,
+    allLogs,
+    allDebriefs,
+    allWords,
+    shadowItems,
     exercises,
-    logs,
-    debriefs,
-    words,
     backupDue,
   } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -29,6 +33,24 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
   const [confirmClear, setConfirmClear] = useState(false);
   const [confirmImport, setConfirmImport] = useState<File | null>(null);
   const [storage, setStorage] = useState<string>("…");
+  const [enVoices, setEnVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [hiVoices, setHiVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    const load = () => {
+      setEnVoices(listVoices("en"));
+      setHiVoices(listVoices("hi"));
+    };
+    load();
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.onvoiceschanged = load;
+    }
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -43,7 +65,7 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
         setStorage("unknown");
       }
     })();
-  }, [recordings.length]);
+  }, [allRecordings.length, shadowItems.length]);
 
   const onFile = (f: File | null) => {
     if (f) setConfirmImport(f);
@@ -140,7 +162,7 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
             <div className="flex items-center justify-between gap-3 rounded-lg bg-[var(--panel2)] px-3 py-2.5">
               <div>
                 <p className="text-[13px] font-medium">Restore from backup</p>
-                <p className="text-[11.5px] text-[var(--muted)]">Replaces current data with the backup contents (v2 &amp; v3 supported).</p>
+                <p className="text-[11.5px] text-[var(--muted)]">Replaces current data with the backup contents (v2–v5 supported, including Hindi &amp; Shadowing).</p>
               </div>
               <div className="flex gap-2">
                 <Btn variant="soft" onClick={() => void exportJSON(false)}>Text only</Btn>
@@ -155,17 +177,52 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
             )}
             <div className="rounded-lg border border-dashed border-[var(--line)] p-3 text-[12px] leading-relaxed text-[var(--muted)]">
               <p>
-                <strong className="text-[var(--ink)]">How persistence works:</strong> everything lives in this browser&apos;s IndexedDB (schema v3 with non-destructive migrations). Closing tabs, refreshing, and app updates never drop your history. Export periodically to keep an offline safety copy.
+                <strong className="text-[var(--ink)]">How persistence works:</strong> everything lives in this browser&apos;s IndexedDB (schema v5 with non-destructive migrations). English progress, Hindi progress, Word Banks, and Speaker Shadowing clips are stored safely side by side.
               </p>
               <p className="mt-2">
-                <strong className="text-[var(--ink)]">Offline:</strong> the app, coached materials, 12-week program, and all your data work locally. Live speech-to-text works best in Chrome or Edge on desktop.
+                <strong className="text-[var(--ink)]">Offline:</strong> the app, coached English &amp; Hindi materials, 12-week program, and Shadowing Studio work locally. Live speech-to-text works best in Chrome or Edge on desktop.
               </p>
             </div>
           </div>
         </Card>
 
-        <Card title="Settings" sub="Saved automatically.">
+        <Card title="Settings" sub="Saved automatically. Website interface always stays in English.">
           <div className="grid gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Active Practice Language" hint="English & Hindi progress stay separate.">
+                <div className="flex rounded-lg border border-[var(--line)] p-0.5">
+                  {(["en", "hi"] as const).map((lang) => (
+                    <button
+                      key={lang}
+                      type="button"
+                      onClick={() => setPracticeLanguage(lang)}
+                      className={`flex-1 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition ${
+                        practiceLanguage === lang ? "bg-[var(--brand)] text-white" : "text-[var(--muted)]"
+                      }`}
+                    >
+                      {lang === "hi" ? "Hindi · हिन्दी" : "English"}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="Hindi Romanized Guide" hint="Show Hinglish reading under Devanagari.">
+                <div className="flex rounded-lg border border-[var(--line)] p-0.5">
+                  {([true, false] as const).map((on) => (
+                    <button
+                      key={String(on)}
+                      type="button"
+                      onClick={() => setSettings({ showHindiRomanized: on })}
+                      className={`flex-1 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition ${
+                        (settings.showHindiRomanized ?? true) === on ? "bg-[var(--brand)] text-white" : "text-[var(--muted)]"
+                      }`}
+                    >
+                      {on ? "Shown" : "Devanagari only"}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <Field label="Theme">
                 <div className="flex rounded-lg border border-[var(--line)] p-0.5">
@@ -226,6 +283,39 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
                 />
               </Field>
             </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <Field label="English model voice">
+                <Select
+                  value={settings.preferredVoice ?? ""}
+                  onChange={(e) => setSettings({ preferredVoice: e.target.value || null })}
+                >
+                  <option value="">Auto (best English voice)</option>
+                  {enVoices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field
+                label="Hindi model voice (hi-IN)"
+                hint={hasNativeVoice("hi") ? `${hiVoices.length} Hindi voice(s) available` : "No local Hindi OS voice detected — Chrome/Edge online voices recommended."}
+              >
+                <Select
+                  value={settings.preferredVoiceHi ?? ""}
+                  onChange={(e) => setSettings({ preferredVoiceHi: e.target.value || null })}
+                >
+                  <option value="">Auto (best Hindi voice)</option>
+                  {hiVoices.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name} ({v.lang})
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+
             <div className="rounded-lg bg-[var(--panel2)] px-3 py-2.5 text-[12.5px] text-[var(--muted)]">
               Breathing pattern:{" "}
               <strong className="text-[var(--ink)]">
@@ -238,16 +328,24 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Your data at a glance">
+        <Card title="Your data at a glance (all languages + shadowing)">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <div className="stat"><span className="stat-label">Practice time</span><span className="stat-value">{fmtDur(stats.totalSec)}</span></div>
-            <div className="stat"><span className="stat-label">Sessions</span><span className="stat-value">{stats.sessionCount}</span></div>
-            <div className="stat"><span className="stat-label">Recordings</span><span className="stat-value">{recordings.length}</span></div>
-            <div className="stat"><span className="stat-label">Saved Words</span><span className="stat-value">{words.length}</span></div>
-            <div className="stat"><span className="stat-label">Debriefs</span><span className="stat-value">{debriefs.length}</span></div>
+            <div className="stat"><span className="stat-label">Total time</span><span className="stat-value">{fmtDur(langSummaries.en.totalSec + langSummaries.hi.totalSec)}</span></div>
+            <div className="stat"><span className="stat-label">Recordings</span><span className="stat-value">{allRecordings.length}</span></div>
+            <div className="stat"><span className="stat-label">Saved Words</span><span className="stat-value">{allWords.length}</span></div>
+            <div className="stat"><span className="stat-label">Shadow Clips</span><span className="stat-value">{shadowItems.length}</span></div>
+            <div className="stat"><span className="stat-label">Debriefs</span><span className="stat-value">{allDebriefs.length}</span></div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[12px]">
+            <div className="rounded-lg bg-[var(--panel2)] px-3 py-2">
+              <strong className="text-[var(--ink)]">English:</strong> {langSummaries.en.recordingCount} takes · {langSummaries.en.wordCount} words · {langSummaries.en.currentStreak}d streak
+            </div>
+            <div className="rounded-lg bg-[var(--panel2)] px-3 py-2">
+              <strong className="text-[var(--ink)]">Hindi:</strong> {langSummaries.hi.recordingCount} takes · {langSummaries.hi.wordCount} words · {langSummaries.hi.currentStreak}d streak
+            </div>
           </div>
           <p className="mt-3 text-[12px] text-[var(--muted)]">
-            Storage: {storage} · {logs.length} logs · {words.length} word bank entries · {exercises.length} custom exercises · IndexedDB “speechcoach” (schema v4)
+            Storage: {storage} · {allLogs.length} logs · {exercises.length} custom exercises · IndexedDB “speechcoach” (schema v5)
           </p>
         </Card>
 
@@ -295,7 +393,7 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
         <div className="grid gap-4">
           <div>
             <p className="text-[13.5px] leading-relaxed text-[var(--muted)]">
-              This deletes <strong className="text-[var(--ink)]">everything</strong>: {recordings.length} recordings (+ audio), {logs.length} logs, {exercises.length} custom exercises, coach debriefs, and settings. There is no undo.
+              This deletes <strong className="text-[var(--ink)]">everything</strong>: {allRecordings.length} recordings (+ audio), {allLogs.length} logs, {allWords.length} saved words, {shadowItems.length} speaker shadowing clips, {exercises.length} custom exercises, coach debriefs, and settings. There is no undo.
             </p>
             <Chip tone="bad" className="mt-2">Recommend: Export a backup first</Chip>
           </div>

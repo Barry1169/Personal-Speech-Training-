@@ -2,12 +2,14 @@ import {
   COACH_SKILL_LABELS,
   GOAL_OPTIONS,
   dateKey,
+  langOf,
   type CoachPlan,
   type CoachSkillKey,
   type CoachedExercise,
   type DetailedAssessment,
   type Difficulty,
   type PlanPriority,
+  type PracticeLanguage,
   type PracticeLog,
   type PracticeMaterialType,
   type Recording,
@@ -15,7 +17,7 @@ import {
   type SkillKey,
   type UserProfile,
 } from "./types";
-import { COACHED_MATERIALS, getCoachedExerciseById } from "./materials";
+import { getCoachedExerciseById, getMaterialsForLanguage } from "./materials";
 import { compareWords, computeDetailedAssessment } from "./analytics";
 import { SKILL_LABELS } from "./coach";
 
@@ -71,7 +73,22 @@ export function levelFromDifficulty(diff: Difficulty): number {
   return 5;
 }
 
-export function targetBandForLevel(level: number, stammerFocus = false): { min: number; max: number } {
+export function targetBandForLevel(
+  level: number,
+  stammerFocus = false,
+  language: PracticeLanguage = "en"
+): { min: number; max: number } {
+  if (language === "hi") {
+    if (stammerFocus) {
+      if (level <= 2) return { min: 88, max: 112 };
+      return { min: 95, max: 120 };
+    }
+    if (level <= 1) return { min: 95, max: 122 };
+    if (level === 2) return { min: 100, max: 128 };
+    if (level === 3) return { min: 105, max: 132 };
+    if (level === 4) return { min: 110, max: 138 };
+    return { min: 112, max: 142 };
+  }
   if (stammerFocus) {
     // Calm, pressure-free speech rhythm ideal for smooth fluency and preventing blocks
     if (level <= 2) return { min: 98, max: 125 };
@@ -149,7 +166,11 @@ const DEFAULT_REASONS: Record<CoachSkillKey, string> = {
 /**
  * Generates an explainable initial CoachPlan from onboarding answers + optional baseline assessment.
  */
-export function buildInitialPlan(profile: UserProfile, baseline?: DetailedAssessment | null): CoachPlan {
+export function buildInitialPlan(
+  profile: UserProfile,
+  baseline?: DetailedAssessment | null,
+  language: PracticeLanguage = "en"
+): CoachPlan {
   let adaptiveLevel = levelFromDifficulty(profile.experienceLevel);
   if (baseline) {
     if (baseline.overallScore >= 84 && adaptiveLevel < 4) adaptiveLevel += 1;
@@ -157,7 +178,7 @@ export function buildInitialPlan(profile: UserProfile, baseline?: DetailedAssess
   }
   const difficulty = difficultyFromLevel(adaptiveLevel);
   const stammerFocus = profile.goals.includes("stammer_fluency");
-  const band = targetBandForLevel(adaptiveLevel, stammerFocus);
+  const band = targetBandForLevel(adaptiveLevel, stammerFocus, language);
 
   // Score candidate priority skills by combining baseline evidence, self-reported weaknesses, and goals
   const weightMap = new Map<CoachSkillKey, { weight: number; reason: string }>();
@@ -289,11 +310,14 @@ function pickBestMaterial(
   targetSkills: CoachSkillKey[],
   avoidIds: Set<string>,
   seed: number,
-  desiredFocusTags: ("stammering" | "youtube")[] = []
+  desiredFocusTags: ("stammering" | "youtube")[] = [],
+  language: PracticeLanguage = "en"
 ): CoachedExercise {
-  const candidates = COACHED_MATERIALS.filter((m) => allowedTypes.includes(m.materialType));
+  const poolForLang = getMaterialsForLanguage(language);
+  const candidates = poolForLang.filter((m) => allowedTypes.includes(m.materialType));
+  const effectiveCandidates = candidates.length > 0 ? candidates : poolForLang;
   // Rank by difficulty match, specialty focus tags (stammering / YouTube), skill overlap, and freshness
-  const scored = candidates.map((m, idx) => {
+  const scored = effectiveCandidates.map((m, idx) => {
     let score = 0;
     if (m.difficulty === difficulty) score += 20;
     else if (
@@ -322,7 +346,7 @@ function pickBestMaterial(
 
 /**
  * Selects a calm, structured, time-budgeted Daily Training Session tailored to
- * the user's current weaknesses, difficulty level, and available minutes.
+ * the user's current weaknesses, difficulty level, language, and available minutes.
  */
 export function selectDailySession(
   profile: UserProfile,
@@ -330,10 +354,13 @@ export function selectDailySession(
   recordings: Recording[],
   debriefs: SessionDebrief[],
   dateStr: string = dateKey(),
-  customWordExercise?: CoachedExercise | null
+  customWordExercise?: CoachedExercise | null,
+  language: PracticeLanguage = "en"
 ): DailySessionPlan {
   const seed = hashDay(dateStr);
-  const lastDebrief = debriefs[0];
+  const langDebriefs = debriefs.filter((d) => langOf(d) === language);
+  const langRecordings = recordings.filter((r) => langOf(r) === language);
+  const lastDebrief = langDebriefs[0];
   const recentIds = new Set<string>(lastDebrief?.exerciseIds ?? []);
   const desiredFocusTags: ("stammering" | "youtube")[] = [];
   if (profile.goals.includes("stammer_fluency")) desiredFocusTags.push("stammering");
@@ -351,7 +378,7 @@ export function selectDailySession(
   ) {
     const resolved = lastDebrief.tomorrowExerciseIds
       .map((id) => getCoachedExerciseById(id))
-      .filter((x): x is CoachedExercise => Boolean(x));
+      .filter((x): x is CoachedExercise => Boolean(x) && langOf(x) === language);
     if (resolved.length >= 2) chosen = resolved;
   }
 
@@ -361,7 +388,7 @@ export function selectDailySession(
       topSkill === "pronunciation" || seed % 2 === 1
         ? ["tongue_twister", "short_sentence"]
         : ["short_sentence", "tongue_twister"];
-    const ex1 = pickBestMaterial(precisionTypes, plan.difficulty, prioritySkills, recentIds, seed, desiredFocusTags);
+    const ex1 = pickBestMaterial(precisionTypes, plan.difficulty, prioritySkills, recentIds, seed, desiredFocusTags, language);
     recentIds.add(ex1.id);
 
     // Slot 2: Practical Reading / Narrative Material (Paragraph, Long Passage, Storytelling, or Conversation)
@@ -372,7 +399,7 @@ export function selectDailySession(
       ["storytelling", "conversation"],
     ];
     const pool = rotatingPools[seed % rotatingPools.length];
-    const ex2 = pickBestMaterial(pool, plan.difficulty, prioritySkills, recentIds, seed + 3, desiredFocusTags);
+    const ex2 = pickBestMaterial(pool, plan.difficulty, prioritySkills, recentIds, seed + 3, desiredFocusTags, language);
     recentIds.add(ex2.id);
 
     chosen = [ex1, ex2];
@@ -381,19 +408,19 @@ export function selectDailySession(
     if (profile.dailyMinutes >= 15) {
       const transferTypes: PracticeMaterialType[] =
         ex2.materialType === "conversation" ? ["impromptu", "storytelling"] : ["impromptu", "conversation"];
-      const ex3 = pickBestMaterial(transferTypes, plan.difficulty, prioritySkills, recentIds, seed + 11, desiredFocusTags);
+      const ex3 = pickBestMaterial(transferTypes, plan.difficulty, prioritySkills, recentIds, seed + 11, desiredFocusTags, language);
       chosen.push(ex3);
     }
 
     // Slot 4 (for >= 25 min schedules): Endurance Reading Passage
     if (profile.dailyMinutes >= 25 && !chosen.some((c) => c.materialType === "long_passage")) {
-      const ex4 = pickBestMaterial(["long_passage"], plan.difficulty, prioritySkills, recentIds, seed + 17, desiredFocusTags);
+      const ex4 = pickBestMaterial(["long_passage"], plan.difficulty, prioritySkills, recentIds, seed + 17, desiredFocusTags, language);
       chosen.push(ex4);
     }
   }
 
   // Include user's Personal Word Bank custom drill right in today's session without overloading their budget
-  if (customWordExercise) {
+  if (customWordExercise && langOf(customWordExercise) === language) {
     if (profile.dailyMinutes <= 10 && chosen.length >= 2) {
       chosen = [chosen[0], customWordExercise];
     } else if (chosen.length >= 3) {
@@ -408,7 +435,7 @@ export function selectDailySession(
   const totalMinutes =
     breathMin + Math.round(chosen.reduce((acc, e) => acc + e.durationSec, 0) / 60);
 
-  const standings = deriveSkillStandings(recordings).filter((s) => s.score != null);
+  const standings = deriveSkillStandings(langRecordings).filter((s) => s.score != null);
   const measuredWeakest = standings.sort((a, b) => (a.score as number) - (b.score as number))[0];
 
   const focusSkill = measuredWeakest && (measuredWeakest.score as number) < 76 ? measuredWeakest.skill : topSkill;
@@ -505,9 +532,14 @@ export function generateSessionDebrief(params: {
   allRecordings: Recording[];
   profile: UserProfile;
   plan: CoachPlan;
+  language?: PracticeLanguage;
 }): { debrief: SessionDebrief; updatedPlan: CoachPlan } {
   const { durationSec, exercisesCompleted, sessionRecordings, allRecordings, profile, plan } = params;
-  const combined = [...sessionRecordings, ...allRecordings.filter((r) => !sessionRecordings.some((s) => s.id === r.id))];
+  const language: PracticeLanguage =
+    params.language ??
+    (exercisesCompleted[0] ? langOf(exercisesCompleted[0]) : sessionRecordings[0] ? langOf(sessionRecordings[0]) : "en");
+  const scopedAll = allRecordings.filter((r) => langOf(r) === language);
+  const combined = [...sessionRecordings, ...scopedAll.filter((r) => !sessionRecordings.some((s) => s.id === r.id))];
   const evaluations = (sessionRecordings.length > 0 ? sessionRecordings : combined.slice(0, 3)).map((r) => ({
     r,
     a: getRecordingAssessment(r),
@@ -631,6 +663,7 @@ export function generateSessionDebrief(params: {
       id: "tmp",
       createdAt: Date.now(),
       date: dateKey(),
+      language,
       durationSec,
       exercisesCompleted: exercisesCompleted.map((e) => e.title),
       exerciseIds: exercisesCompleted.map((e) => e.id),
@@ -645,17 +678,17 @@ export function generateSessionDebrief(params: {
       summary: "",
     },
   ];
-  const tomorrowPlan = selectDailySession(profile, updatedPlan, combined, avoidToday, tomorrowKey);
+  const tomorrowPlan = selectDailySession(profile, updatedPlan, combined, avoidToday, tomorrowKey, null, language);
 
   const summary =
     sessionRecordings.length > 0
-      ? `You completed ${exercisesCompleted.length} coached exercise${exercisesCompleted.length === 1 ? "" : "s"} (${Math.max(
+      ? `You completed ${exercisesCompleted.length} coached ${language === "hi" ? "Hindi" : "English"} exercise${exercisesCompleted.length === 1 ? "" : "s"} (${Math.max(
           1,
           Math.round(durationSec / 60)
         )} min) and recorded ${sessionRecordings.length} assessed take${sessionRecordings.length === 1 ? "" : "s"} averaging ${avgOverallScore}/100${
           avgWpm != null ? ` at ${avgWpm} WPM` : ""
         }.`
-      : `You completed ${exercisesCompleted.length} guided exercise${exercisesCompleted.length === 1 ? "" : "s"} (${Math.max(
+      : `You completed ${exercisesCompleted.length} guided ${language === "hi" ? "Hindi" : "English"} exercise${exercisesCompleted.length === 1 ? "" : "s"} (${Math.max(
           1,
           Math.round(durationSec / 60)
         )} min). Recording at least one take next session will unlock fresh acoustic metrics.`;
@@ -664,6 +697,7 @@ export function generateSessionDebrief(params: {
     id: `debrief-${Date.now().toString(36)}`,
     createdAt: Date.now(),
     date: dateKey(),
+    language,
     durationSec,
     exercisesCompleted: exercisesCompleted.map((e) => e.title),
     exerciseIds: exercisesCompleted.map((e) => e.id),

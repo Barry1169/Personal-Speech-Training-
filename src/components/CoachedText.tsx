@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { CoachedExercise } from "@/lib/types";
+import { langOf, type CoachedExercise } from "@/lib/types";
 import { useModelAudio } from "@/lib/tts";
 import { useStore } from "@/lib/store";
 import { Btn, Chip, SectionLabel } from "./ui";
@@ -81,7 +81,10 @@ export default function CoachedText({
   const [showCues, setShowCues] = useState(true);
   const [rate, setRate] = useState(settings.ttsRate || 0.9);
   const [briefOpen, setBriefOpen] = useState(!compact);
-  const audio = useModelAudio(settings.preferredVoice);
+  const exLang = langOf(exercise);
+  const preferredVoice = exLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
+  const audio = useModelAudio(preferredVoice, exLang);
+  const showRoman = settings.showHindiRomanized ?? true;
 
   const modelText = exercise.plainText.trim();
 
@@ -99,9 +102,9 @@ export default function CoachedText({
                     Stop model
                   </Btn>
                 ) : (
-                  <Btn variant="soft" onClick={() => audio.playPassage(modelText, rate, settings.preferredVoice)}>
+                  <Btn variant="soft" onClick={() => audio.playPassage(modelText, rate, preferredVoice, exLang)}>
                     <svg width="11" height="11" viewBox="0 0 12 12" fill="currentColor"><path d="M3 2v8l7-4z" /></svg>
-                    Hear model audio
+                    {exLang === "hi" ? "Hear Hindi model" : "Hear model audio"}
                   </Btn>
                 )}
                 <div className="flex items-center rounded-lg border border-[var(--line)] bg-[var(--panel)] p-0.5 text-[11px]">
@@ -128,11 +131,17 @@ export default function CoachedText({
                 {audio.voices.length > 1 && (
                   <select
                     aria-label="Model voice"
-                    value={settings.preferredVoice ?? ""}
-                    onChange={(e) => setSettings({ preferredVoice: e.target.value || null })}
+                    value={preferredVoice ?? ""}
+                    onChange={(e) =>
+                      setSettings(
+                        exLang === "hi"
+                          ? { preferredVoiceHi: e.target.value || null }
+                          : { preferredVoice: e.target.value || null }
+                      )
+                    }
                     className="inp w-auto max-w-[170px] py-1 text-[11.5px]"
                   >
-                    <option value="">Default English voice</option>
+                    <option value="">{exLang === "hi" ? "Default Hindi voice" : "Default English voice"}</option>
                     {audio.voices.slice(0, 12).map((v) => (
                       <option key={v.name} value={v.name}>
                         {v.name.slice(0, 26)} ({v.lang})
@@ -151,6 +160,16 @@ export default function CoachedText({
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5">
+            {exercise.romanizedText && (
+              <button
+                type="button"
+                onClick={() => setSettings({ showHindiRomanized: !showRoman })}
+                className={`chip cursor-pointer ${showRoman ? "chip-brand" : "chip-muted"}`}
+                title="Toggle Romanized Hinglish reading guide underneath the Hindi Devanagari script"
+              >
+                {showRoman ? "Romanized: ON" : "Romanized: OFF"}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => openAddWord("", "exercise")}
@@ -169,13 +188,28 @@ export default function CoachedText({
           </div>
         </div>
 
+        {exLang === "hi" && audio.supported && !audio.hasNativeVoice && (
+          <p className="mb-2 text-[11.5px] text-[var(--muted)]">
+            Tip: If Hindi model audio sounds robotic, install the Hindi voice pack in Windows/Chrome settings — or upload any real Hindi speaker clip in the <strong>Shadow</strong> tab!
+          </p>
+        )}
+
         {audio.playing && audio.activeSentence >= 0 && (
           <p className="mb-2 text-[11.5px] font-medium text-[var(--brand)]">
-            Playing model audio — sentence {audio.activeSentence + 1} (listen to the rhythm, pauses, and falling pitch at periods)
+            Playing model audio — sentence {audio.activeSentence + 1} (listen to the rhythm, pauses, and falling pitch at sentence endings)
           </p>
         )}
 
         <AnnotatedScript text={exercise.annotatedText} showCues={showCues} />
+
+        {exercise.romanizedText && showRoman && (
+          <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3 text-[13px] leading-relaxed text-[var(--muted)]">
+            <span className="mr-1.5 font-bold uppercase tracking-wider text-[10.5px] text-[var(--brand)]">
+              Romanized Guide:
+            </span>
+            {exercise.romanizedText}
+          </div>
+        )}
 
         {showCues && (
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-[var(--line)] pt-2.5 text-[11px] text-[var(--muted)]">

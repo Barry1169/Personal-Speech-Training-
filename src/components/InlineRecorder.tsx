@@ -7,10 +7,12 @@ import { dayProgressLabel } from "@/lib/program";
 import { useStore } from "@/lib/store";
 import {
   EMPTY_SCORES,
+  PRACTICE_LANGUAGE_META,
   fmtDur,
   uid,
   type DetailedAssessment,
   type PitchSample,
+  type PracticeLanguage,
   type Recording,
   type SelfScores,
   type VolumeSample,
@@ -25,6 +27,7 @@ export default function InlineRecorder({
   mode,
   scriptText,
   exerciseId,
+  language,
   targetWpm = 125,
   onSaved,
   saveLabel = "Save & continue",
@@ -34,12 +37,14 @@ export default function InlineRecorder({
   mode: string;
   scriptText: string | null;
   exerciseId?: string;
+  language?: PracticeLanguage;
   targetWpm?: number;
   onSaved?: (rec: Recording, assessment: DetailedAssessment) => void;
   saveLabel?: string;
   compact?: boolean;
 }) {
-  const { settings, saveRecording, addLog, toast } = useStore();
+  const { settings, practiceLanguage, saveRecording, addLog, toast } = useStore();
+  const recLang: PracticeLanguage = language ?? practiceLanguage;
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [elapsed, setElapsed] = useState(0);
@@ -140,7 +145,7 @@ export default function InlineRecorder({
     const pSamples = [...pitchRef.current];
     setTl(samples);
     setPitches(pSamples);
-    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples);
+    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples, recLang);
     const assessment = computeDetailedAssessment({
       analysis,
       self: null,
@@ -155,6 +160,7 @@ export default function InlineRecorder({
       createdAt: Date.now(),
       title,
       mode,
+      language: recLang,
       scriptText: scriptText?.trim() || null,
       transcript,
       durationSec,
@@ -248,7 +254,7 @@ export default function InlineRecorder({
         srRef.current = r;
         r.continuous = true;
         r.interimResults = true;
-        r.lang = "en-US";
+        r.lang = PRACTICE_LANGUAGE_META[recLang].bcp47;
         r.onresult = (e: any) => {
           let interim = "";
           for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -309,10 +315,11 @@ export default function InlineRecorder({
       createdAt: Date.now(),
       title,
       mode,
+      language: recLang,
       scriptText: scriptText?.trim() || null,
       transcript: "",
       durationSec,
-      analysis: buildAnalysis("", durationSec, [], null),
+      analysis: buildAnalysis("", durationSec, [], null, undefined, recLang),
       self: null,
       exerciseId: exerciseId ?? null,
       targetWpm,
@@ -336,8 +343,8 @@ export default function InlineRecorder({
 
   const liveAnalysis = useMemo(() => {
     if (!rec) return null;
-    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp, pitches);
-  }, [rec, effectiveTranscript, tl, liveCmp, pitches]);
+    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp, pitches, recLang);
+  }, [rec, effectiveTranscript, tl, liveCmp, pitches, recLang]);
 
   const hasAnySelf = Object.values(self).some((v) => (v ?? 0) > 0);
 
@@ -374,6 +381,7 @@ export default function InlineRecorder({
       await saveRecording(full, blob);
       if (!savedDone) {
         addLog({
+          language: recLang,
           seconds: full.durationSec,
           mode: full.mode,
           completed: 1,

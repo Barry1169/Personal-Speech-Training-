@@ -4,11 +4,15 @@ import { detectPitchHz, summarizePitch } from "../pitch";
 import {
   analyzePauses,
   analyzeSentences,
+  analyzeTranscript,
   analyzeVolume,
   buildAnalysis,
   compareWords,
   computeDetailedAssessment,
   extractProblemWords,
+  hasDevanagari,
+  splitSentences,
+  tokenize,
 } from "../analytics";
 import {
   analyzeCommonMistakes,
@@ -21,7 +25,17 @@ import {
   monthlyReport,
   selectDailySession,
 } from "../adaptiveCoach";
-import { COACHED_MATERIALS, DIAGNOSTIC_EXERCISE, getCoachedExerciseById } from "../materials";
+import {
+  ALL_COACHED_MATERIALS,
+  COACHED_MATERIALS,
+  DIAGNOSTIC_EXERCISE,
+  DIAGNOSTIC_EXERCISE_HI,
+  HINDI_COACHED_MATERIALS,
+  getCoachedExerciseById,
+  getDiagnosticForLanguage,
+  getMaterialsForLanguage,
+} from "../materials";
+import { analyzePcmProfile, compareShadowTake } from "../shadowing";
 import { BUILTIN_EXERCISES, MODES, PROGRAM, SCENARIOS, dayLabel } from "../program";
 import { streaksFromDates, weeklyReport } from "../coach";
 import {
@@ -32,6 +46,7 @@ import {
   createPersonalWord,
   detectWeakSounds,
   evaluateWordAttempt,
+  generateCustomWordDrillContent,
   getDueWords,
   recommendedPracticeSpeed,
 } from "../pronunciation";
@@ -39,6 +54,7 @@ import {
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
   dateKey,
+  langOf,
   type PitchSample,
   type PracticeLog,
   type Recording,
@@ -641,4 +657,199 @@ test("Personal Pronunciation System: Weak Sound Detector & Custom Daily Word Exe
   );
   assert.ok(session.coachRationale.length > 0, "Daily session must provide a clear coaching rationale");
 });
+
+test("Hindi Speech Pipeline: Devanagari matras, danda sentence splitting, Hindi fillers, and script comparison", () => {
+  const hiText = "नमस्ते, आज का अभ्यास बहुत महत्वपूर्ण है। धीरे और स्पष्ट बोलिए।";
+  assert.equal(hasDevanagari(hiText), true);
+  assert.equal(hasDevanagari("Hello world"), false);
+
+  // \p{M} matras must NOT be stripped from Devanagari words
+  const tokens = tokenize(hiText);
+  assert.ok(tokens.includes("नमस्ते"), `Expected 'नमस्ते' intact with matra, got: ${tokens.join(", ")}`);
+  assert.ok(tokens.includes("महत्वपूर्ण"), `Expected 'महत्वपूर्ण' intact, got: ${tokens.join(", ")}`);
+  assert.ok(tokens.includes("अभ्यास"), `Expected 'अभ्यास' intact, got: ${tokens.join(", ")}`);
+
+  // Devanagari danda (।) splits sentences cleanly
+  const sentences = splitSentences(hiText);
+  assert.equal(sentences.length, 2, `Expected 2 Hindi sentences split on danda, got ${sentences.length}`);
+
+  // Hindi filler detection (मतलब / basically / उम्म)
+  const fillerTranscript = "मतलब आज मैं basically एक ज़रूरी बात कहना चाहता हूँ";
+  const aHi = analyzeTranscript(fillerTranscript, 6, "hi");
+  assert.ok(aHi.fillerTotal >= 2, `Expected >= 2 Hindi fillers detected, got ${aHi.fillerTotal}`);
+
+  // Exact Hindi script comparison should hit 100% coverage (ratio 1)
+  const cmp = compareWords(hiText, hiText);
+  assert.equal(cmp.coverage, 1);
+  assert.equal(cmp.missingCount, 0);
+
+  // Missing a Devanagari word produces a Hindi coaching hint
+  const partialCmp = compareWords("नमस्ते आज का अभ्यास महत्वपूर्ण है", "नमस्ते आज का अभ्यास है");
+  assert.equal(partialCmp.missingCount, 1);
+  const problems = extractProblemWords("नमस्ते आज का अभ्यास महत्वपूर्ण है", "नमस्ते आज का अभ्यास है", partialCmp, {}, []);
+  assert.ok(problems.some((p) => p.word === "महत्वपूर्ण"), "Expected missed Hindi word in problemWords");
+});
+
+test("Hindi Coached Materials & Separate English vs. Hindi Adaptive Plan / Session / Debrief isolation", () => {
+  assert.ok(HINDI_COACHED_MATERIALS.length >= 14, "Expected >= 14 Hindi coached exercises");
+  assert.equal(DIAGNOSTIC_EXERCISE_HI.language, "hi");
+  assert.ok(DIAGNOSTIC_EXERCISE_HI.romanizedText && DIAGNOSTIC_EXERCISE_HI.romanizedText.length > 20);
+  assert.equal(getDiagnosticForLanguage("hi").id, DIAGNOSTIC_EXERCISE_HI.id);
+  assert.equal(getDiagnosticForLanguage("en").id, DIAGNOSTIC_EXERCISE.id);
+
+  // Every Hindi material must have language='hi', Devanagari script, romanized Hinglish guide, and valid target WPM
+  for (const m of HINDI_COACHED_MATERIALS) {
+    assert.equal(m.language, "hi", `Hindi material ${m.id} must have language='hi'`);
+    assert.ok(hasDevanagari(m.plainText), `Hindi material ${m.id} must contain Devanagari text`);
+    assert.ok(m.romanizedText && m.romanizedText.length > 5, `Hindi material ${m.id} must include romanizedText`);
+    assert.ok(m.targetWpm >= 85 && m.targetWpm <= 145, `Hindi material ${m.id} WPM out of range: ${m.targetWpm}`);
+  }
+
+  // getMaterialsForLanguage strictly partitions EN vs HI
+  const enList = getMaterialsForLanguage("en");
+  const hiList = getMaterialsForLanguage("hi");
+  assert.equal(enList.length + hiList.length, ALL_COACHED_MATERIALS.length);
+  assert.ok(enList.every((m) => langOf(m) === "en"));
+  assert.ok(hiList.every((m) => langOf(m) === "hi"));
+
+  const profile = { ...DEFAULT_PROFILE, dailyMinutes: 15, onboardingCompleted: true };
+  const enPlan = buildInitialPlan(profile, null, "en");
+  const hiPlan = buildInitialPlan(profile, null, "hi");
+  assert.ok(hiPlan.targetWpmMax <= enPlan.targetWpmMax, "Hindi plan should respect calmer Hindi WPM targets");
+
+  const enDay = selectDailySession(profile, enPlan, [], [], "2026-11-16", null, "en");
+  const hiDay = selectDailySession(profile, hiPlan, [], [], "2026-11-16", null, "hi");
+  assert.ok(enDay.exercises.length >= 2 && enDay.exercises.every((e) => langOf(e) === "en"));
+  assert.ok(hiDay.exercises.length >= 2 && hiDay.exercises.every((e) => langOf(e) === "hi"));
+
+  const { debrief: hiDebrief } = generateSessionDebrief({
+    durationSec: 600,
+    exercisesCompleted: hiDay.exercises,
+    sessionRecordings: [],
+    allRecordings: [],
+    profile,
+    plan: hiPlan,
+    language: "hi",
+  });
+  assert.equal(hiDebrief.language, "hi");
+  for (const exId of hiDebrief.tomorrowExerciseIds) {
+    const ex = getCoachedExerciseById(exId);
+    assert.ok(ex && langOf(ex) === "hi", `Hindi debrief tomorrow recommendation ${exId} must be a Hindi exercise`);
+  }
+});
+
+test("Hindi Personal Word Bank: curated Hindi phonetics, Hindi weak sound detection, and custom Hindi drill generation", () => {
+  const curatedHi = analyzeWordEntry("प्रभावशाली", "hi");
+  assert.equal(curatedHi.language, "hi");
+  assert.equal(curatedHi.ipaSource, "dictionary");
+  assert.ok(curatedHi.phonetic.toLowerCase().includes("shaa"), `Expected romanized phonetic guide, got ${curatedHi.phonetic}`);
+  assert.ok(curatedHi.soundTags.includes("samyuktakshar"), "Expected samyuktakshar category for प्रभावशाली");
+  assert.ok(hasDevanagari(curatedHi.exampleSentence));
+
+  // Arbitrary unlisted Hindi word falls back cleanly with matra/conjunct analysis & rough transliteration
+  const arbitraryHi = analyzeWordEntry("पर्यावरण", "hi");
+  assert.equal(arbitraryHi.language, "hi");
+  assert.ok(arbitraryHi.phonetic.length > 2);
+  assert.ok(arbitraryHi.soundTags.length >= 1);
+
+  const hiWords = [
+    createPersonalWord("प्रभावशाली", { language: "hi", source: "manual" }),
+    createPersonalWord("आत्मविश्वास", { language: "hi", source: "manual" }),
+    createPersonalWord("धैर्य", { language: "hi", source: "manual" }),
+  ];
+  assert.ok(hiWords.every((w) => langOf(w) === "hi"));
+
+  const { weakSounds } = detectWeakSounds(hiWords, [], "hi");
+  assert.ok(weakSounds.length >= 1, "Expected Hindi weak sound categories to be detected");
+  for (const finding of weakSounds) {
+    for (const id of finding.recommendedExerciseIds) {
+      const ex = getCoachedExerciseById(id);
+      assert.ok(ex, `Hindi recommended exercise ${id} must exist in ALL_COACHED_MATERIALS`);
+      assert.equal(langOf(ex!), "hi", `Hindi weak sound drill ${id} must be a Hindi exercise`);
+    }
+  }
+
+  const drill = generateCustomWordDrillContent(hiWords, 0, "hi");
+  assert.ok(hasDevanagari(drill.paragraph), `Expected Devanagari Hindi paragraph, got: ${drill.paragraph}`);
+  assert.ok(drill.paragraph.includes("प्रभावशाली"));
+  assert.ok(drill.romanizedParagraph && drill.romanizedParagraph.length > 10, "Hindi custom drill must include romanizedParagraph");
+});
+
+test("Speaker Shadowing Studio DSP: speaker-normalized pitch melody, pace, pauses, emphasis, and script scoring", () => {
+  const sr = 16000;
+  // Synthesize a 4.0s speech-like signal with 2 voiced phrases separated by a 0.48s pause,
+  // with a clear rising-then-falling intonation melody (baseFreq -> baseFreq*1.35 -> baseFreq*0.92).
+  function makeSyntheticSpeech(baseFreqHz: number, speedScale: number, invertMelody = false, includePause = true): Float32Array {
+    const totalSec = 4.0 / speedScale;
+    const totalSamples = Math.round(totalSec * sr);
+    const out = new Float32Array(totalSamples);
+    let phase = 0;
+    for (let i = 0; i < totalSamples; i++) {
+      const tNorm = i / totalSamples; // 0..1 across utterance
+      if (includePause && tNorm >= 0.44 && tNorm <= 0.56) {
+        out[i] = 0;
+        continue;
+      }
+      if (tNorm < 0.04 || tNorm > 0.96) {
+        out[i] = 0;
+        continue;
+      }
+      const contour = Math.sin(Math.PI * tNorm);
+      const semitoneShift = invertMelody ? -4 * contour : 5 * contour;
+      const freq = baseFreqHz * Math.pow(2, semitoneShift / 12);
+      const amp = 0.14 + 0.16 * Math.pow(Math.sin(2 * Math.PI * tNorm), 2);
+      phase += (2 * Math.PI * freq) / sr;
+      out[i] = amp * (0.75 * Math.sin(phase) + 0.25 * Math.sin(2 * phase));
+    }
+    return out;
+  }
+
+  const script = "Clear pauses make every strong point land cleanly.";
+  // Reference speaker: baritone voice at 130 Hz with middle pause
+  const refPcm = makeSyntheticSpeech(130, 1.0, false, true);
+  const refProfile = analyzePcmProfile(refPcm, sr, script);
+  assert.ok(refProfile.totalDurationSec > 3.5 && refProfile.totalDurationSec < 4.5);
+  assert.ok(refProfile.pauseCount >= 1, `Expected >= 1 detected pause in reference clip, got ${refProfile.pauseCount}`);
+  assert.ok(refProfile.medianPitchHz != null && refProfile.medianPitchHz > 110 && refProfile.medianPitchHz < 220);
+  assert.equal(refProfile.energyContour.length, 64);
+  assert.equal(refProfile.pitchContourSt.length, 64);
+
+  // Take 1: Higher-pitched speaker (alto at 195 Hz, +7 semitones!) matching the EXACT melody, pace, and pause!
+  const goodUserPcm = makeSyntheticSpeech(195, 1.0, false, true);
+  const goodUserProfile = analyzePcmProfile(goodUserPcm, sr, script);
+  const goodCmp = compareShadowTake({
+    reference: refProfile,
+    attempt: goodUserProfile,
+    scriptText: script,
+    attemptTranscript: script,
+  });
+  assert.ok(
+    goodCmp.intonationScore >= 75,
+    `Speaker-normalized pitch melody should score >= 75 despite +7 semitone voice difference, got ${goodCmp.intonationScore}`
+  );
+  assert.ok(goodCmp.paceScore >= 85, `Matching pace should score >= 85, got ${goodCmp.paceScore}`);
+  assert.ok(goodCmp.overallMatch >= 80, `Strong shadowing take should score >= 80, got ${goodCmp.overallMatch}`);
+  assert.equal(goodCmp.wordMatchPct, 100);
+
+  // Take 2: Way too fast (1.65x) + inverted melody + skipped pause!
+  const rushedUserPcm = makeSyntheticSpeech(130, 1.65, true, false);
+  const rushedUserProfile = analyzePcmProfile(rushedUserPcm, sr, script);
+  const rushedCmp = compareShadowTake({
+    reference: refProfile,
+    attempt: rushedUserProfile,
+    scriptText: script,
+    attemptTranscript: "Clear pauses make every point land.",
+  });
+  assert.ok(rushedCmp.paceRatioPct > 135, `Expected rushed paceRatioPct > 135, got ${rushedCmp.paceRatioPct}`);
+  assert.ok(
+    rushedCmp.intonationScore < goodCmp.intonationScore - 20,
+    `Inverted pitch contour (${rushedCmp.intonationScore}) should score much lower than matching contour (${goodCmp.intonationScore})`
+  );
+  assert.ok(
+    rushedCmp.overallMatch < goodCmp.overallMatch - 20,
+    `Rushed off-melody take (${rushedCmp.overallMatch}) should score significantly lower than matched take (${goodCmp.overallMatch})`
+  );
+  assert.ok(rushedCmp.improvements.length >= 2, "Expected actionable coaching improvements on rough take");
+});
+
 

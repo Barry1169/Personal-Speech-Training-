@@ -8,10 +8,13 @@ import {
   type CoachedExercise,
   type Exercise,
   type PersonalWord,
+  type PracticeLanguage,
   type PracticeLog,
   type Recording,
   type SessionDebrief,
   type Settings,
+  type ShadowAttempt,
+  type ShadowItem,
   type Toast,
   type UserProfile,
   type WeakComboFinding,
@@ -22,13 +25,16 @@ import {
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
+  PRACTICE_LANGUAGE_META,
   dateKey,
+  langOf,
 } from "./types";
 import { computeBadges, streaksFromDates, type Badge, type StatsPack } from "./coach";
 import {
   analyzeCommonMistakes,
   computeOverallImprovement,
   deriveSkillStandings,
+  getRecordingAssessment,
   selectDailySession,
   type CommonMistakesReport,
   type DailySessionPlan,
@@ -55,6 +61,7 @@ interface ExportPayload {
   recordings: Recording[];
   debriefs?: SessionDebrief[];
   words?: PersonalWord[];
+  shadowItems?: ShadowItem[];
   blobs: Record<string, { mime: string; data: string }>;
 }
 
@@ -65,17 +72,88 @@ export interface AddWordModalState {
   editingWord: PersonalWord | null;
 }
 
+export interface LangProgressSummary {
+  language: PracticeLanguage;
+  label: string;
+  nativeLabel: string;
+  totalSec: number;
+  sessionCount: number;
+  recordingCount: number;
+  currentStreak: number;
+  bestStreak: number;
+  avgScore: number | null;
+  wordCount: number;
+  masteredWords: number;
+  adaptiveLevel: number;
+}
+
+function defaultPlanForLang(lang: PracticeLanguage): CoachPlan {
+  if (lang === "hi") {
+    return {
+      ...DEFAULT_COACH_PLAN,
+      targetWpmMin: 100,
+      targetWpmMax: 128,
+      adjustmentNote:
+        "Initial Hindi speech plan created. Hindi progress, streak, and adaptive level track independently from English.",
+    };
+  }
+  return DEFAULT_COACH_PLAN;
+}
+
+function computeStatsPack(logs: PracticeLog[], recordings: Recording[]): StatsPack {
+  const totalSec = logs.reduce((a, l) => a + l.seconds, 0);
+  const dates = [...new Set(logs.map((l) => l.date))];
+  const st = streaksFromDates(dates);
+  const bestAvgScore = recordings.reduce((best, r) => {
+    if (!r.self) return best;
+    const vals = [r.self.clarity, r.self.pronunciation, r.self.fluency, r.self.pacing, r.self.vocalControl].filter(
+      (v) => v > 0
+    );
+    if (!vals.length) return best;
+    return Math.max(best, vals.reduce((a, b) => a + b, 0) / vals.length);
+  }, 0);
+  const maxWpm = recordings.reduce((m, r) => Math.max(m, r.analysis.wpm ?? 0), 0);
+  const minFillerRecording = recordings
+    .filter((r) => r.analysis.fillerTotal === 0)
+    .reduce((m, r) => Math.max(m, r.analysis.wordCount), 0);
+  return {
+    totalSec,
+    sessionCount: logs.length,
+    recordingCount: recordings.length,
+    currentStreak: st.current,
+    bestStreak: st.best,
+    bestAvgScore,
+    maxWpm,
+    minFillerRecording,
+    daysPracticed: dates.length,
+  };
+}
+
 interface Store {
   hydrated: boolean;
   nowMs: number;
+  practiceLanguage: PracticeLanguage;
+  setPracticeLanguage: (lang: PracticeLanguage) => void;
   settings: Settings;
   profile: UserProfile;
   coachPlan: CoachPlan;
   exercises: Exercise[];
+  /** Scoped to active practiceLanguage (separate English & Hindi progress!) */
   logs: PracticeLog[];
   recordings: Recording[];
   debriefs: SessionDebrief[];
   words: PersonalWord[];
+  /** Full cross-language arrays for storage stats & side-by-side summary */
+  allLogs: PracticeLog[];
+  allRecordings: Recording[];
+  allDebriefs: SessionDebrief[];
+  allWords: PersonalWord[];
+  langSummaries: Record<PracticeLanguage, LangProgressSummary>;
+  /** Speaker Shadowing Studio items */
+  shadowItems: ShadowItem[];
+  addShadowItem: (item: ShadowItem, refBlob: Blob) => Promise<void>;
+  deleteShadowItem: (id: string) => Promise<void>;
+  recordShadowAttempt: (itemId: string, attempt: ShadowAttempt, attemptBlob: Blob) => Promise<ShadowItem | null>;
   toasts: Toast[];
   guidedOpen: boolean;
   setGuidedOpen: (open: boolean) => void;
@@ -89,7 +167,7 @@ interface Store {
   setPracticeWordId: (id: string | null) => void;
   setSettings: (patch: Partial<Settings>) => void;
   updateProfile: (patch: Partial<UserProfile>) => void;
-  updateCoachPlan: (plan: CoachPlan) => void;
+  updateCoachPlan: (plan: CoachPlan, lang?: PracticeLanguage) => void;
   completeOnboarding: (profile: UserProfile, plan: CoachPlan) => void;
   toggleFavorite: (id: string) => void;
   addExercise: (e: Omit<Exercise, "id" | "createdAt" | "builtin">) => void;
@@ -98,6 +176,7 @@ interface Store {
   addWord: (
     rawWord: string,
     opts?: {
+      language?: PracticeLanguage;
       status?: WordStatus;
       source?: PersonalWord["source"];
       phonetic?: string;
@@ -156,10 +235,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [nowMs, setNowMs] = useState(0);
   const [settings, setSettingsState] = useState<Settings>(DEFAULT_SETTINGS);
   const [exercises, setExercises] = useState<Exercise[]>([]);
-  const [logs, setLogs] = useState<PracticeLog[]>([]);
-  const [recordings, setRecordings] = useState<Recording[]>([]);
-  const [debriefs, setDebriefs] = useState<SessionDebrief[]>([]);
-  const [words, setWords] = useState<PersonalWord[]>([]);
+  const [allLogs, setAllLogs] = useState<PracticeLog[]>([]);
+  const [allRecordings, setAllRecordings] = useState<Recording[]>([]);
+  const [allDebriefs, setAllDebriefs] = useState<SessionDebrief[]>([]);
+  const [allWords, setAllWords] = useState<PersonalWord[]>([]);
+  const [shadowItems, setShadowItems] = useState<ShadowItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [guidedOpen, setGuidedOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -176,10 +256,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     settingsRef.current = settings;
   }, [settings]);
 
-  const wordsRef = useRef(words);
+  const practiceLanguage: PracticeLanguage = settings.practiceLanguage === "hi" ? "hi" : "en";
+  const practiceLangRef = useRef<PracticeLanguage>(practiceLanguage);
   useEffect(() => {
-    wordsRef.current = words;
-  }, [words]);
+    practiceLangRef.current = practiceLanguage;
+  }, [practiceLanguage]);
+
+  const allWordsRef = useRef(allWords);
+  useEffect(() => {
+    allWordsRef.current = allWords;
+  }, [allWords]);
+
+  const shadowRef = useRef(shadowItems);
+  useEffect(() => {
+    shadowRef.current = shadowItems;
+  }, [shadowItems]);
 
   const toast = useCallback((msg: string, kind: Toast["kind"] = "ok") => {
     const id = toastId++;
@@ -203,13 +294,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        const [st, ex, lg, rec, deb, wds] = await Promise.all([
+        const [st, ex, lg, rec, deb, wds, sh] = await Promise.all([
           idbGet<Settings & { key: string }>("kv", "settings"),
           idbAll<Exercise>("exercises"),
           idbAll<PracticeLog>("logs"),
           idbAll<Recording>("recordings"),
           idbAll<SessionDebrief>("debriefs").catch(() => [] as SessionDebrief[]),
           idbAll<PersonalWord>("words").catch(() => [] as PersonalWord[]),
+          idbAll<ShadowItem>("shadowItems").catch(() => [] as ShadowItem[]),
         ]);
 
         const mergedProfile: UserProfile = {
@@ -217,31 +309,38 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           ...(st?.profile ?? {}),
         };
 
-        // Returning v1/v2 user with existing history should not be forced through first-time onboarding
         if (!mergedProfile.onboardingCompleted && (lg.length > 0 || rec.length > 0)) {
           mergedProfile.onboardingCompleted = true;
           mergedProfile.dailyMinutes = st?.dailyGoalMin ?? DEFAULT_PROFILE.dailyMinutes;
         }
 
-        const mergedPlan: CoachPlan = {
+        const enPlan: CoachPlan = {
           ...DEFAULT_COACH_PLAN,
-          ...(st?.coachPlan ?? {}),
+          ...(st?.coachPlanByLang?.en ?? st?.coachPlan ?? {}),
         };
+        const hiPlan: CoachPlan = {
+          ...defaultPlanForLang("hi"),
+          ...(st?.coachPlanByLang?.hi ?? {}),
+        };
+        const activeLang: PracticeLanguage = st?.practiceLanguage === "hi" ? "hi" : "en";
 
         const mergedSettings: Settings = {
           ...DEFAULT_SETTINGS,
           ...(st ?? {}),
+          practiceLanguage: activeLang,
           profile: mergedProfile,
-          coachPlan: mergedPlan,
+          coachPlan: activeLang === "hi" ? hiPlan : enPlan,
+          coachPlanByLang: { en: enPlan, hi: hiPlan },
         };
 
         setNowMs(Date.now());
         setSettingsState(mergedSettings);
         setExercises(ex);
-        setLogs(lg);
-        setRecordings(rec.sort((a, b) => b.createdAt - a.createdAt));
-        setDebriefs(deb.sort((a, b) => b.createdAt - a.createdAt));
-        setWords(wds.sort((a, b) => b.updatedAt - a.updatedAt));
+        setAllLogs(lg);
+        setAllRecordings(rec.sort((a, b) => b.createdAt - a.createdAt));
+        setAllDebriefs(deb.sort((a, b) => b.createdAt - a.createdAt));
+        setAllWords(wds.sort((a, b) => b.updatedAt - a.updatedAt));
+        setShadowItems(sh.sort((a, b) => b.updatedAt - a.updatedAt));
       } catch (e) {
         console.error("IDB hydrate failed", e);
         setNowMs(Date.now());
@@ -265,6 +364,34 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const setPracticeLanguage = useCallback(
+    (lang: PracticeLanguage) => {
+      setSettingsState((prev) => {
+        const planForLang =
+          prev.coachPlanByLang?.[lang] ?? (lang === "en" ? prev.coachPlan ?? DEFAULT_COACH_PLAN : defaultPlanForLang("hi"));
+        const next: Settings = {
+          ...prev,
+          practiceLanguage: lang,
+          coachPlan: planForLang,
+          coachPlanByLang: {
+            en: prev.coachPlanByLang?.en ?? prev.coachPlan ?? DEFAULT_COACH_PLAN,
+            hi: prev.coachPlanByLang?.hi ?? defaultPlanForLang("hi"),
+          },
+        };
+        void idbPut("kv", { ...next, key: "settings" });
+        return next;
+      });
+      setPracticeWordId(null);
+      toast(
+        lang === "hi"
+          ? "Switched to Hindi practice (हिन्दी) — separate Hindi progress & Word Bank active"
+          : "Switched to English practice — separate English progress & Word Bank active",
+        "info"
+      );
+    },
+    [toast]
+  );
+
   const updateProfile = useCallback((patch: Partial<UserProfile>) => {
     setSettingsState((prev) => {
       const profile: UserProfile = { ...DEFAULT_PROFILE, ...(prev.profile ?? {}), ...patch };
@@ -278,9 +405,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const updateCoachPlan = useCallback((coachPlan: CoachPlan) => {
+  const updateCoachPlan = useCallback((coachPlan: CoachPlan, lang?: PracticeLanguage) => {
     setSettingsState((prev) => {
-      const next: Settings = { ...prev, coachPlan };
+      const targetLang = lang ?? (prev.practiceLanguage === "hi" ? "hi" : "en");
+      const byLang = {
+        en: prev.coachPlanByLang?.en ?? prev.coachPlan ?? DEFAULT_COACH_PLAN,
+        hi: prev.coachPlanByLang?.hi ?? defaultPlanForLang("hi"),
+        [targetLang]: coachPlan,
+      };
+      const next: Settings = {
+        ...prev,
+        coachPlan: targetLang === (prev.practiceLanguage === "hi" ? "hi" : "en") ? coachPlan : prev.coachPlan,
+        coachPlanByLang: byLang,
+      };
       void idbPut("kv", { ...next, key: "settings" });
       return next;
     });
@@ -288,16 +425,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const completeOnboarding = useCallback((profile: UserProfile, coachPlan: CoachPlan) => {
     setSettingsState((prev) => {
+      const activeLang: PracticeLanguage = prev.practiceLanguage === "hi" ? "hi" : "en";
       const finalProfile: UserProfile = {
         ...profile,
         onboardingCompleted: true,
         onboardingCompletedAt: profile.onboardingCompletedAt ?? Date.now(),
+      };
+      const byLang = {
+        en: prev.coachPlanByLang?.en ?? coachPlan,
+        hi: prev.coachPlanByLang?.hi ?? {
+          ...coachPlan,
+          targetWpmMin: Math.min(coachPlan.targetWpmMin, 102),
+          targetWpmMax: Math.min(coachPlan.targetWpmMax, 128),
+          adjustmentNote: "Initial Hindi plan aligned to your goals. Tracks independently from English.",
+        },
+        [activeLang]: coachPlan,
       };
       const next: Settings = {
         ...prev,
         dailyGoalMin: finalProfile.dailyMinutes,
         profile: finalProfile,
         coachPlan,
+        coachPlanByLang: byLang,
       };
       void idbPut("kv", { ...next, key: "settings" });
       return next;
@@ -320,6 +469,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (e: Omit<Exercise, "id" | "createdAt" | "builtin">) => {
       const full: Exercise = {
         ...e,
+        language: e.language ?? practiceLangRef.current,
         id: `cx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
         builtin: false,
         createdAt: Date.now(),
@@ -360,6 +510,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (
       rawWord: string,
       opts?: {
+        language?: PracticeLanguage;
         status?: WordStatus;
         source?: PersonalWord["source"];
         phonetic?: string;
@@ -370,16 +521,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         mouthGuide?: Partial<WordMouthGuide>;
       }
     ) => {
+      const targetLang = opts?.language ?? practiceLangRef.current;
       const norm = normalizeWord(rawWord);
-      const existing = wordsRef.current.find((w) => w.normalized === norm);
+      const existing = allWordsRef.current.find((w) => w.normalized === norm && langOf(w) === targetLang);
       if (existing) {
-        toast(`"${existing.word}" is already in your Personal Word Bank`, "info");
+        toast(`"${existing.word}" is already in your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`, "info");
         return { word: existing, existed: true };
       }
-      const created = createPersonalWord(rawWord, opts);
-      setWords((prev) => [created, ...prev]);
+      const created = createPersonalWord(rawWord, { ...opts, language: targetLang });
+      setAllWords((prev) => [created, ...prev]);
       void idbPut("words", created);
-      toast(`Added "${created.word}" to your Personal Word Bank`);
+      toast(`Added "${created.word}" to your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`);
       return { word: created, existed: false };
     },
     [toast]
@@ -389,10 +541,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (word: PersonalWord) => {
       const stamped: PersonalWord = {
         ...word,
+        language: langOf(word),
         normalized: normalizeWord(word.word),
         updatedAt: Date.now(),
       };
-      setWords((prev) => prev.map((w) => (w.id === stamped.id ? stamped : w)));
+      setAllWords((prev) => prev.map((w) => (w.id === stamped.id ? stamped : w)));
       void idbPut("words", stamped);
       toast(`Updated "${stamped.word}"`);
     },
@@ -401,8 +554,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const deleteWord = useCallback(
     (id: string) => {
-      const target = wordsRef.current.find((w) => w.id === id);
-      setWords((prev) => prev.filter((w) => w.id !== id));
+      const target = allWordsRef.current.find((w) => w.id === id);
+      setAllWords((prev) => prev.filter((w) => w.id !== id));
       void idbDelete("words", id);
       setPracticeWordId((cur) => (cur === id ? null : cur));
       toast(target ? `Removed "${target.word}" from Word Bank` : "Word removed", "info");
@@ -416,6 +569,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       id: `log-${ts.toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       ts,
       date: dateKey(ts),
+      language: l.language ?? practiceLangRef.current,
       seconds: l.seconds,
       mode: l.mode,
       completed: l.completed,
@@ -423,14 +577,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       overallScore: l.overallScore ?? null,
       note: l.note,
     };
-    setLogs((prev) => [full, ...prev]);
+    setAllLogs((prev) => [full, ...prev]);
     void idbPut("logs", full);
   }, []);
 
   const saveRecording = useCallback(async (r: Recording, blob: Blob | null) => {
-    await idbPut("recordings", r);
-    if (blob) await idbPut("blobs", blob, r.id);
-    setRecordings((prev) => [r, ...prev.filter((p) => p.id !== r.id)]);
+    const stamped: Recording = { ...r, language: r.language ?? practiceLangRef.current };
+    await idbPut("recordings", stamped);
+    if (blob) await idbPut("blobs", blob, stamped.id);
+    setAllRecordings((prev) => [stamped, ...prev.filter((p) => p.id !== stamped.id)]);
   }, []);
 
   const recordWordAttempt = useCallback(
@@ -440,20 +595,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       recording?: Recording | null,
       blob?: Blob | null
     ): Promise<PersonalWord | null> => {
-      const current = wordsRef.current.find((w) => w.id === wordId);
+      const current = allWordsRef.current.find((w) => w.id === wordId);
       if (!current) return null;
+      const wordLang = langOf(current);
 
       if (recording) {
-        await saveRecording(recording, blob ?? null);
+        await saveRecording({ ...recording, language: wordLang }, blob ?? null);
       }
 
       const prevStatus = current.status;
       const updated = applyWordAttempt(current, attempt);
       await idbPut("words", updated);
-      setWords((prev) => [updated, ...prev.filter((w) => w.id !== updated.id)]);
+      setAllWords((prev) => [updated, ...prev.filter((w) => w.id !== updated.id)]);
       setNowMs(Date.now());
 
       addLog({
+        language: wordLang,
         seconds: Math.max(15, recording?.durationSec ?? 25),
         mode: "word-bank",
         completed: 1,
@@ -485,20 +642,93 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteRecording = useCallback(async (id: string) => {
     await idbDelete("recordings", id);
     await idbDelete("blobs", id).catch(() => undefined);
-    setRecordings((prev) => prev.filter((r) => r.id !== id));
+    setAllRecordings((prev) => prev.filter((r) => r.id !== id));
   }, []);
 
   const saveDebrief = useCallback(async (d: SessionDebrief, updatedPlan?: CoachPlan) => {
-    await idbPut("debriefs", d);
-    setDebriefs((prev) => [d, ...prev.filter((x) => x.id !== d.id)]);
+    const debLang = d.language ?? practiceLangRef.current;
+    const stamped: SessionDebrief = { ...d, language: debLang };
+    await idbPut("debriefs", stamped);
+    setAllDebriefs((prev) => [stamped, ...prev.filter((x) => x.id !== stamped.id)]);
     if (updatedPlan) {
       setSettingsState((prev) => {
-        const next = { ...prev, coachPlan: updatedPlan };
+        const byLang = {
+          en: prev.coachPlanByLang?.en ?? prev.coachPlan ?? DEFAULT_COACH_PLAN,
+          hi: prev.coachPlanByLang?.hi ?? defaultPlanForLang("hi"),
+          [debLang]: updatedPlan,
+        };
+        const next: Settings = {
+          ...prev,
+          coachPlan: debLang === (prev.practiceLanguage === "hi" ? "hi" : "en") ? updatedPlan : prev.coachPlan,
+          coachPlanByLang: byLang,
+        };
         void idbPut("kv", { ...next, key: "settings" });
         return next;
       });
     }
   }, []);
+
+  // ---- Speaker Shadowing Studio Persistence ----
+
+  const addShadowItem = useCallback(
+    async (item: ShadowItem, refBlob: Blob) => {
+      await idbPut("blobs", refBlob, item.audioBlobKey);
+      await idbPut("shadowItems", item);
+      setShadowItems((prev) => [item, ...prev.filter((x) => x.id !== item.id)]);
+      toast(`Saved speaker reference "${item.title}"`);
+    },
+    [toast]
+  );
+
+  const deleteShadowItem = useCallback(
+    async (id: string) => {
+      const target = shadowRef.current.find((s) => s.id === id);
+      await idbDelete("shadowItems", id);
+      if (target) {
+        await idbDelete("blobs", target.audioBlobKey).catch(() => undefined);
+        for (const a of target.attempts) {
+          await idbDelete("blobs", a.audioBlobKey).catch(() => undefined);
+        }
+      }
+      setShadowItems((prev) => prev.filter((s) => s.id !== id));
+      toast("Shadowing clip deleted", "info");
+    },
+    [toast]
+  );
+
+  const recordShadowAttempt = useCallback(
+    async (itemId: string, attempt: ShadowAttempt, attemptBlob: Blob): Promise<ShadowItem | null> => {
+      const current = shadowRef.current.find((s) => s.id === itemId);
+      if (!current) return null;
+
+      await idbPut("blobs", attemptBlob, attempt.audioBlobKey);
+      const nextAttempts = [...current.attempts, attempt];
+      const bestScore = nextAttempts.reduce((m, a) => Math.max(m, a.comparison.overallMatch), 0);
+      const updated: ShadowItem = {
+        ...current,
+        attempts: nextAttempts,
+        bestScore,
+        updatedAt: attempt.ts,
+      };
+      await idbPut("shadowItems", updated);
+      setShadowItems((prev) => [updated, ...prev.filter((x) => x.id !== updated.id)]);
+
+      // Count shadowing practice toward the clip's own language progress!
+      addLog({
+        language: current.language,
+        seconds: Math.max(15, Math.round(attempt.profile.totalDurationSec)),
+        mode: "shadowing",
+        completed: 1,
+        scores: null,
+        overallScore: attempt.comparison.overallMatch,
+        note: `Speaker shadow: ${current.title} (${attempt.comparison.overallMatch}/100 match)`,
+      });
+
+      toast(`Shadow take scored — ${attempt.comparison.overallMatch}/100 delivery match!`);
+      return updated;
+    },
+    [addLog, toast]
+  );
 
   const getBlob = useCallback(async (id: string) => idbGet<Blob>("blobs", id), []);
 
@@ -516,31 +746,39 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async (includeAudio: boolean) => {
       const payload: ExportPayload = {
         app: "speechcoach",
-        version: 4,
+        version: 5,
         exportedAt: Date.now(),
         settings: settingsRef.current,
         exercises,
-        logs,
-        recordings,
-        debriefs,
-        words,
+        logs: allLogs,
+        recordings: allRecordings,
+        debriefs: allDebriefs,
+        words: allWords,
+        shadowItems,
         blobs: {},
       };
       let skippedAudio = false;
       if (includeAudio) {
         let total = 0;
-        for (const r of recordings) {
-          if (!r.hasAudio) continue;
-          const blob = await idbGet<Blob>("blobs", r.id);
+        const blobEntries: { key: string; mime: string }[] = [];
+        for (const r of allRecordings) {
+          if (r.hasAudio) blobEntries.push({ key: r.id, mime: r.mimeType });
+        }
+        for (const sh of shadowItems) {
+          blobEntries.push({ key: sh.audioBlobKey, mime: sh.mimeType });
+          for (const a of sh.attempts) blobEntries.push({ key: a.audioBlobKey, mime: a.mimeType });
+        }
+        for (const entry of blobEntries) {
+          const blob = await idbGet<Blob>("blobs", entry.key);
           if (!blob) continue;
           const b64 = await blobToB64(blob);
           total += b64.length;
-          if (total > 40_000_000) {
+          if (total > 45_000_000) {
             skippedAudio = true;
             payload.blobs = {};
             break;
           }
-          payload.blobs[r.id] = { mime: r.mimeType, data: b64 };
+          payload.blobs[entry.key] = { mime: entry.mime, data: b64 };
         }
       }
       const data = new Blob([JSON.stringify(payload)], { type: "application/json" });
@@ -553,12 +791,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSettings({ lastBackupAt: Date.now() });
       toast(
         skippedAudio
-          ? "Backup saved (audio too large — text only). Use per-recording download for audio."
-          : "Backup exported"
+          ? "Backup saved (audio too large — text & metadata saved). Download large clips individually."
+          : "Backup exported (English + Hindi + Shadow clips)"
       );
       return { ok: true, skippedAudio };
     },
-    [exercises, logs, recordings, debriefs, words, setSettings, toast]
+    [exercises, allLogs, allRecordings, allDebriefs, allWords, shadowItems, setSettings, toast]
   );
 
   const importJSON = useCallback(
@@ -575,15 +813,22 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             p.settings.profile?.onboardingCompleted ??
             ((p.logs?.length ?? 0) > 0 || (p.recordings?.length ?? 0) > 0),
         };
-        const restoredPlan: CoachPlan = {
+        const enPlan: CoachPlan = {
           ...DEFAULT_COACH_PLAN,
-          ...(p.settings.coachPlan ?? {}),
+          ...(p.settings.coachPlanByLang?.en ?? p.settings.coachPlan ?? {}),
         };
+        const hiPlan: CoachPlan = {
+          ...defaultPlanForLang("hi"),
+          ...(p.settings.coachPlanByLang?.hi ?? {}),
+        };
+        const activeLang: PracticeLanguage = p.settings.practiceLanguage === "hi" ? "hi" : "en";
         const mergedSettings: Settings = {
           ...DEFAULT_SETTINGS,
           ...p.settings,
+          practiceLanguage: activeLang,
           profile: restoredProfile,
-          coachPlan: restoredPlan,
+          coachPlan: activeLang === "hi" ? hiPlan : enPlan,
+          coachPlanByLang: { en: enPlan, hi: hiPlan },
         };
 
         await idbPut("kv", { ...mergedSettings, key: "settings" });
@@ -601,17 +846,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         for (const d of p.debriefs ?? []) await idbPut("debriefs", d);
         await idbClear("words").catch(() => undefined);
         for (const w of p.words ?? []) await idbPut("words", w);
+        await idbClear("shadowItems").catch(() => undefined);
+        for (const sh of p.shadowItems ?? []) {
+          await idbPut("shadowItems", sh);
+          const refEntry = p.blobs?.[sh.audioBlobKey];
+          if (refEntry?.data) await idbPut("blobs", b64ToBlob(refEntry.data, refEntry.mime), sh.audioBlobKey);
+          for (const att of sh.attempts ?? []) {
+            const aEntry = p.blobs?.[att.audioBlobKey];
+            if (aEntry?.data) await idbPut("blobs", b64ToBlob(aEntry.data, aEntry.mime), att.audioBlobKey);
+          }
+        }
 
         setSettingsState(mergedSettings);
         setExercises(p.exercises ?? []);
-        setLogs(p.logs ?? []);
-        setRecordings((p.recordings ?? []).sort((a, b) => b.createdAt - a.createdAt));
-        setDebriefs((p.debriefs ?? []).sort((a, b) => b.createdAt - a.createdAt));
-        setWords((p.words ?? []).sort((a, b) => b.updatedAt - a.updatedAt));
+        setAllLogs(p.logs ?? []);
+        setAllRecordings((p.recordings ?? []).sort((a, b) => b.createdAt - a.createdAt));
+        setAllDebriefs((p.debriefs ?? []).sort((a, b) => b.createdAt - a.createdAt));
+        setAllWords((p.words ?? []).sort((a, b) => b.updatedAt - a.updatedAt));
+        setShadowItems((p.shadowItems ?? []).sort((a, b) => b.updatedAt - a.updatedAt));
         toast(
           `Backup restored: ${p.logs?.length ?? 0} logs, ${(p.recordings ?? []).length} recordings, ${
             (p.words ?? []).length
-          } words`
+          } words, ${(p.shadowItems ?? []).length} shadow clips`
         );
         return { ok: true, msg: "Import complete." };
       } catch (e) {
@@ -622,58 +878,82 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const clearAllData = useCallback(async () => {
-    for (const s of ["kv", "exercises", "logs", "recordings", "blobs", "debriefs", "words"]) {
+    for (const s of ["kv", "exercises", "logs", "recordings", "blobs", "debriefs", "words", "shadowItems"]) {
       await idbClear(s).catch(() => undefined);
     }
     setSettingsState(DEFAULT_SETTINGS);
     setExercises([]);
-    setLogs([]);
-    setRecordings([]);
-    setDebriefs([]);
-    setWords([]);
+    setAllLogs([]);
+    setAllRecordings([]);
+    setAllDebriefs([]);
+    setAllWords([]);
+    setShadowItems([]);
     void idbPut("kv", { ...DEFAULT_SETTINGS, key: "settings" });
     toast("All local data cleared", "info");
   }, [toast]);
 
-  // ---- computed ----
+  // ---- Active-language isolated slices (English vs. Hindi progress kept completely separate!) ----
+
+  const logs = useMemo(
+    () => allLogs.filter((l) => langOf(l) === practiceLanguage),
+    [allLogs, practiceLanguage]
+  );
+  const recordings = useMemo(
+    () => allRecordings.filter((r) => langOf(r) === practiceLanguage),
+    [allRecordings, practiceLanguage]
+  );
+  const debriefs = useMemo(
+    () => allDebriefs.filter((d) => langOf(d) === practiceLanguage),
+    [allDebriefs, practiceLanguage]
+  );
+  const words = useMemo(
+    () => allWords.filter((w) => langOf(w) === practiceLanguage),
+    [allWords, practiceLanguage]
+  );
+
   const profile = useMemo<UserProfile>(
     () => ({ ...DEFAULT_PROFILE, ...(settings.profile ?? {}) }),
     [settings.profile]
   );
 
-  const coachPlan = useMemo<CoachPlan>(
-    () => ({ ...DEFAULT_COACH_PLAN, ...(settings.coachPlan ?? {}) }),
-    [settings.coachPlan]
-  );
+  const coachPlan = useMemo<CoachPlan>(() => {
+    const planForLang = settings.coachPlanByLang?.[practiceLanguage];
+    if (planForLang) return { ...defaultPlanForLang(practiceLanguage), ...planForLang };
+    return practiceLanguage === "hi"
+      ? defaultPlanForLang("hi")
+      : { ...DEFAULT_COACH_PLAN, ...(settings.coachPlan ?? {}) };
+  }, [settings.coachPlanByLang, settings.coachPlan, practiceLanguage]);
 
-  const stats = useMemo<StatsPack>(() => {
-    const totalSec = logs.reduce((a, l) => a + l.seconds, 0);
-    const dates = [...new Set(logs.map((l) => l.date))];
-    const st = streaksFromDates(dates);
-    const bestAvgScore = recordings.reduce((best, r) => {
-      if (!r.self) return best;
-      const vals = [r.self.clarity, r.self.pronunciation, r.self.fluency, r.self.pacing, r.self.vocalControl].filter(
-        (v) => v > 0
-      );
-      if (!vals.length) return best;
-      return Math.max(best, vals.reduce((a, b) => a + b, 0) / vals.length);
-    }, 0);
-    const maxWpm = recordings.reduce((m, r) => Math.max(m, r.analysis.wpm ?? 0), 0);
-    const minFillerRecording = recordings
-      .filter((r) => r.analysis.fillerTotal === 0)
-      .reduce((m, r) => Math.max(m, r.analysis.wordCount), 0);
-    return {
-      totalSec,
-      sessionCount: logs.length,
-      recordingCount: recordings.length,
-      currentStreak: st.current,
-      bestStreak: st.best,
-      bestAvgScore,
-      maxWpm,
-      minFillerRecording,
-      daysPracticed: dates.length,
+  const stats = useMemo<StatsPack>(() => computeStatsPack(logs, recordings), [logs, recordings]);
+
+  // Independent side-by-side summary for both English and Hindi
+  const langSummaries = useMemo<Record<PracticeLanguage, LangProgressSummary>>(() => {
+    const build = (lang: PracticeLanguage): LangProgressSummary => {
+      const lLogs = allLogs.filter((x) => langOf(x) === lang);
+      const lRecs = allRecordings.filter((x) => langOf(x) === lang);
+      const lWords = allWords.filter((x) => langOf(x) === lang);
+      const st = computeStatsPack(lLogs, lRecs);
+      const scored = lRecs.map((r) => getRecordingAssessment(r).overallScore);
+      const avgScore = scored.length > 0 ? Math.round(scored.reduce((a, b) => a + b, 0) / scored.length) : null;
+      const lPlan = settings.coachPlanByLang?.[lang] ?? defaultPlanForLang(lang);
+      const meta = PRACTICE_LANGUAGE_META[lang];
+      return {
+        language: lang,
+        label: meta.label,
+        nativeLabel: meta.nativeLabel,
+        totalSec: st.totalSec,
+        sessionCount: st.sessionCount,
+        recordingCount: st.recordingCount,
+        currentStreak: st.currentStreak,
+        bestStreak: st.bestStreak,
+        avgScore,
+        wordCount: lWords.length,
+        masteredWords: lWords.filter((w) => w.status === "mastered").length,
+        adaptiveLevel: lPlan.adaptiveLevel,
+      };
     };
-  }, [logs, recordings]);
+    return { en: build("en"), hi: build("hi") };
+  }, [allLogs, allRecordings, allWords, settings.coachPlanByLang]);
 
   const badges = useMemo(() => computeBadges(stats), [stats]);
 
@@ -702,31 +982,46 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     () => (nowMs > 0 ? getDueWords(words, nowMs) : words.filter((w) => w.status !== "mastered")),
     [words, nowMs]
   );
-  const { weakSounds, weakCombos } = useMemo(() => detectWeakSounds(words, recordings), [words, recordings]);
+  const { weakSounds, weakCombos } = useMemo(
+    () => detectWeakSounds(words, recordings, practiceLanguage),
+    [words, recordings, practiceLanguage]
+  );
   const overallBeforeAfter = useMemo(() => compareOverallBeforeAfter(recordings), [recordings]);
 
   const todayKeyStr = useMemo(() => dateKey(nowMs || undefined), [nowMs]);
   const customWordExercise = useMemo(() => {
     if (words.length === 0) return null;
     const daySeed = todayKeyStr.split("-").reduce((acc, s) => acc + Number(s), 0);
-    return buildCustomWordCoachedExercise(words, daySeed);
-  }, [words, todayKeyStr]);
+    return buildCustomWordCoachedExercise(words, daySeed, practiceLanguage);
+  }, [words, todayKeyStr, practiceLanguage]);
 
   const todayPlan = useMemo(
-    () => selectDailySession(profile, coachPlan, recordings, debriefs, todayKeyStr, customWordExercise),
-    [profile, coachPlan, recordings, debriefs, todayKeyStr, customWordExercise]
+    () =>
+      selectDailySession(
+        profile,
+        coachPlan,
+        recordings,
+        debriefs,
+        todayKeyStr,
+        customWordExercise,
+        practiceLanguage
+      ),
+    [profile, coachPlan, recordings, debriefs, todayKeyStr, customWordExercise, practiceLanguage]
   );
 
   const backupDue = useMemo(() => {
     if (!nowMs) return false;
-    if (!settings.lastBackupAt) return logs.length + recordings.length + words.length > 0;
+    const totalItems = allLogs.length + allRecordings.length + allWords.length + shadowItems.length;
+    if (!settings.lastBackupAt) return totalItems > 0;
     const dismissed = settings.backupDismissedUntil != null && nowMs < settings.backupDismissedUntil;
     return !dismissed && nowMs - settings.lastBackupAt > 7 * 86400000;
-  }, [nowMs, settings.lastBackupAt, settings.backupDismissedUntil, logs.length, recordings.length, words.length]);
+  }, [nowMs, settings.lastBackupAt, settings.backupDismissedUntil, allLogs.length, allRecordings.length, allWords.length, shadowItems.length]);
 
   const value: Store = {
     hydrated,
     nowMs,
+    practiceLanguage,
+    setPracticeLanguage,
     settings,
     profile,
     coachPlan,
@@ -735,6 +1030,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     recordings,
     debriefs,
     words,
+    allLogs,
+    allRecordings,
+    allDebriefs,
+    allWords,
+    langSummaries,
+    shadowItems,
+    addShadowItem,
+    deleteShadowItem,
+    recordShadowAttempt,
     toasts,
     guidedOpen,
     setGuidedOpen,

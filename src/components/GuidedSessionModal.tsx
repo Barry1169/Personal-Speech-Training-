@@ -40,6 +40,7 @@ export default function GuidedSessionModal({
   onClose: () => void;
 }) {
   const {
+    practiceLanguage,
     todayPlan,
     profile,
     coachPlan,
@@ -121,16 +122,18 @@ export default function GuidedSessionModal({
       allRecordings: mergedAllRecordings,
       profile,
       plan: coachPlan,
+      language: practiceLanguage,
     });
 
     // Only log extra session time if no recordings logged it already, or log the guided coaching completion cleanly
     addLog({
+      language: practiceLanguage,
       seconds: sessionRecs.length === 0 ? elapsedSec : Math.max(60, elapsedSec - sessionRecs.reduce((a, r) => a + r.durationSec, 0)),
       mode: "guided-daily",
       completed: effectiveCompleted.length,
       scores: null,
       overallScore: generated.avgOverallScore,
-      note: `Daily Guided Coaching — ${todayPlan.focusLabel}`,
+      note: `Daily Guided Coaching (${practiceLanguage === "hi" ? "Hindi" : "English"}) — ${todayPlan.focusLabel}`,
     });
 
     await saveDebrief(generated, updatedPlan);
@@ -290,6 +293,7 @@ export default function GuidedSessionModal({
                   key={currentExercise.id}
                   title={currentExercise.title}
                   mode={currentExercise.materialType === "impromptu" ? "impromptu" : "guided-daily"}
+                  language={currentExercise.language ?? practiceLanguage}
                   scriptText={currentExercise.plainText || null}
                   exerciseId={currentExercise.id}
                   targetWpm={currentExercise.targetWpm}
