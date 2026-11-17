@@ -54,7 +54,7 @@ const MATERIAL_TYPES: PracticeMaterialType[] = [
 ];
 
 export default function ModesView({ nav }: { nav: (v: string) => void }) {
-  const { settings, coachPlan, profile, setSettings, toast } = useStore();
+  const { settings, coachPlan, profile, setSettings, openAddWord, toast } = useStore();
   const [section, setSection] = useState<"materials" | "modes">("materials");
   const [focusTrack, setFocusTrack] = useState<"all" | "stammering" | "youtube">(() =>
     profile.goals.includes("stammer_fluency")
@@ -388,7 +388,10 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
               title={active.name}
               sub={active.tagline}
               right={
-                <div className="flex gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
+                    + Add My Word
+                  </Btn>
                   {isMode(active) && active.sentences && <StopTTS />}
                   <Chip tone="accent">{active.minutes} min</Chip>
                 </div>

@@ -2,7 +2,7 @@
 // SpeechCoach stores everything locally so progress survives app updates and works offline.
 
 const DB_NAME = "speechcoach";
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -38,6 +38,14 @@ function getDB(): Promise<IDBDatabase> {
         if (!db.objectStoreNames.contains("debriefs")) {
           const d = db.createObjectStore("debriefs", { keyPath: "id" });
           d.createIndex("createdAt", "createdAt", { unique: false });
+        }
+      }
+      // ---- Migration to v4: personal pronunciation word bank ----
+      if (old < 4) {
+        if (!db.objectStoreNames.contains("words")) {
+          const w = db.createObjectStore("words", { keyPath: "id" });
+          w.createIndex("normalized", "normalized", { unique: false });
+          w.createIndex("status", "status", { unique: false });
         }
       }
       // Future migrations: add `if (old < N)` blocks here. Existing data is never dropped.

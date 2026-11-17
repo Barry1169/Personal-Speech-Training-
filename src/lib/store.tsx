@@ -3,14 +3,22 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { idbAll, idbGet, idbPut, idbDelete, idbClear, blobToB64, b64ToBlob } from "./idb";
 import {
+  type BeforeAfterComparison,
   type CoachPlan,
+  type CoachedExercise,
   type Exercise,
+  type PersonalWord,
   type PracticeLog,
   type Recording,
   type SessionDebrief,
   type Settings,
   type Toast,
   type UserProfile,
+  type WeakComboFinding,
+  type WeakSoundFinding,
+  type WordAttempt,
+  type WordMouthGuide,
+  type WordStatus,
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
@@ -27,6 +35,15 @@ import {
   type ImprovementSummary,
   type SkillStanding,
 } from "./adaptiveCoach";
+import {
+  applyWordAttempt,
+  buildCustomWordCoachedExercise,
+  compareOverallBeforeAfter,
+  createPersonalWord,
+  detectWeakSounds,
+  getDueWords,
+  normalizeWord,
+} from "./pronunciation";
 
 interface ExportPayload {
   app: "speechcoach";
@@ -37,7 +54,15 @@ interface ExportPayload {
   logs: PracticeLog[];
   recordings: Recording[];
   debriefs?: SessionDebrief[];
+  words?: PersonalWord[];
   blobs: Record<string, { mime: string; data: string }>;
+}
+
+export interface AddWordModalState {
+  open: boolean;
+  initialWord: string;
+  source: PersonalWord["source"];
+  editingWord: PersonalWord | null;
 }
 
 interface Store {
@@ -50,11 +75,18 @@ interface Store {
   logs: PracticeLog[];
   recordings: Recording[];
   debriefs: SessionDebrief[];
+  words: PersonalWord[];
   toasts: Toast[];
   guidedOpen: boolean;
   setGuidedOpen: (open: boolean) => void;
   onboardingOpen: boolean;
   setOnboardingOpen: (open: boolean) => void;
+  addWordModal: AddWordModalState;
+  openAddWord: (initialWord?: string, source?: PersonalWord["source"]) => void;
+  openEditWord: (word: PersonalWord) => void;
+  closeAddWord: () => void;
+  practiceWordId: string | null;
+  setPracticeWordId: (id: string | null) => void;
   setSettings: (patch: Partial<Settings>) => void;
   updateProfile: (patch: Partial<UserProfile>) => void;
   updateCoachPlan: (plan: CoachPlan) => void;
@@ -63,6 +95,27 @@ interface Store {
   addExercise: (e: Omit<Exercise, "id" | "createdAt" | "builtin">) => void;
   updateExercise: (e: Exercise) => void;
   deleteExercise: (id: string) => void;
+  addWord: (
+    rawWord: string,
+    opts?: {
+      status?: WordStatus;
+      source?: PersonalWord["source"];
+      phonetic?: string;
+      ipa?: string;
+      meaning?: string;
+      exampleSentence?: string;
+      notes?: string;
+      mouthGuide?: Partial<WordMouthGuide>;
+    }
+  ) => { word: PersonalWord; existed: boolean };
+  updateWord: (word: PersonalWord) => void;
+  deleteWord: (id: string) => void;
+  recordWordAttempt: (
+    wordId: string,
+    attempt: WordAttempt,
+    recording?: Recording | null,
+    blob?: Blob | null
+  ) => Promise<PersonalWord | null>;
   addLog: (l: Omit<PracticeLog, "id" | "ts" | "date"> & { ts?: number }) => void;
   saveRecording: (r: Recording, blob: Blob | null) => Promise<void>;
   deleteRecording: (id: string) => Promise<void>;
@@ -79,6 +132,11 @@ interface Store {
   skillStandings: SkillStanding[];
   improvement: ImprovementSummary;
   commonMistakes: CommonMistakesReport;
+  dueWords: PersonalWord[];
+  weakSounds: WeakSoundFinding[];
+  weakCombos: WeakComboFinding[];
+  overallBeforeAfter: BeforeAfterComparison | null;
+  customWordExercise: CoachedExercise | null;
   todayPlan: DailySessionPlan;
   backupDue: boolean;
 }
@@ -101,14 +159,27 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [logs, setLogs] = useState<PracticeLog[]>([]);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [debriefs, setDebriefs] = useState<SessionDebrief[]>([]);
+  const [words, setWords] = useState<PersonalWord[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [guidedOpen, setGuidedOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [addWordModal, setAddWordModal] = useState<AddWordModalState>({
+    open: false,
+    initialWord: "",
+    source: "manual",
+    editingWord: null,
+  });
+  const [practiceWordId, setPracticeWordId] = useState<string | null>(null);
 
   const settingsRef = useRef(settings);
   useEffect(() => {
     settingsRef.current = settings;
   }, [settings]);
+
+  const wordsRef = useRef(words);
+  useEffect(() => {
+    wordsRef.current = words;
+  }, [words]);
 
   const toast = useCallback((msg: string, kind: Toast["kind"] = "ok") => {
     const id = toastId++;
@@ -116,16 +187,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
   }, []);
 
+  const openAddWord = useCallback((initialWord = "", source: PersonalWord["source"] = "manual") => {
+    setAddWordModal({ open: true, initialWord, source, editingWord: null });
+  }, []);
+
+  const openEditWord = useCallback((word: PersonalWord) => {
+    setAddWordModal({ open: true, initialWord: word.word, source: word.source, editingWord: word });
+  }, []);
+
+  const closeAddWord = useCallback(() => {
+    setAddWordModal((prev) => ({ ...prev, open: false, editingWord: null }));
+  }, []);
+
   // ---- hydrate from IndexedDB ----
   useEffect(() => {
     (async () => {
       try {
-        const [st, ex, lg, rec, deb] = await Promise.all([
+        const [st, ex, lg, rec, deb, wds] = await Promise.all([
           idbGet<Settings & { key: string }>("kv", "settings"),
           idbAll<Exercise>("exercises"),
           idbAll<PracticeLog>("logs"),
           idbAll<Recording>("recordings"),
           idbAll<SessionDebrief>("debriefs").catch(() => [] as SessionDebrief[]),
+          idbAll<PersonalWord>("words").catch(() => [] as PersonalWord[]),
         ]);
 
         const mergedProfile: UserProfile = {
@@ -157,6 +241,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         setLogs(lg);
         setRecordings(rec.sort((a, b) => b.createdAt - a.createdAt));
         setDebriefs(deb.sort((a, b) => b.createdAt - a.createdAt));
+        setWords(wds.sort((a, b) => b.updatedAt - a.updatedAt));
       } catch (e) {
         console.error("IDB hydrate failed", e);
         setNowMs(Date.now());
@@ -269,6 +354,62 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [toast]
   );
 
+  // ---- Personal Pronunciation Word Bank CRUD & Spaced-Repetition ----
+
+  const addWord = useCallback(
+    (
+      rawWord: string,
+      opts?: {
+        status?: WordStatus;
+        source?: PersonalWord["source"];
+        phonetic?: string;
+        ipa?: string;
+        meaning?: string;
+        exampleSentence?: string;
+        notes?: string;
+        mouthGuide?: Partial<WordMouthGuide>;
+      }
+    ) => {
+      const norm = normalizeWord(rawWord);
+      const existing = wordsRef.current.find((w) => w.normalized === norm);
+      if (existing) {
+        toast(`"${existing.word}" is already in your Personal Word Bank`, "info");
+        return { word: existing, existed: true };
+      }
+      const created = createPersonalWord(rawWord, opts);
+      setWords((prev) => [created, ...prev]);
+      void idbPut("words", created);
+      toast(`Added "${created.word}" to your Personal Word Bank`);
+      return { word: created, existed: false };
+    },
+    [toast]
+  );
+
+  const updateWord = useCallback(
+    (word: PersonalWord) => {
+      const stamped: PersonalWord = {
+        ...word,
+        normalized: normalizeWord(word.word),
+        updatedAt: Date.now(),
+      };
+      setWords((prev) => prev.map((w) => (w.id === stamped.id ? stamped : w)));
+      void idbPut("words", stamped);
+      toast(`Updated "${stamped.word}"`);
+    },
+    [toast]
+  );
+
+  const deleteWord = useCallback(
+    (id: string) => {
+      const target = wordsRef.current.find((w) => w.id === id);
+      setWords((prev) => prev.filter((w) => w.id !== id));
+      void idbDelete("words", id);
+      setPracticeWordId((cur) => (cur === id ? null : cur));
+      toast(target ? `Removed "${target.word}" from Word Bank` : "Word removed", "info");
+    },
+    [toast]
+  );
+
   const addLog = useCallback((l: Omit<PracticeLog, "id" | "ts" | "date"> & { ts?: number }) => {
     const ts = l.ts ?? Date.now();
     const full: PracticeLog = {
@@ -291,6 +432,55 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     if (blob) await idbPut("blobs", blob, r.id);
     setRecordings((prev) => [r, ...prev.filter((p) => p.id !== r.id)]);
   }, []);
+
+  const recordWordAttempt = useCallback(
+    async (
+      wordId: string,
+      attempt: WordAttempt,
+      recording?: Recording | null,
+      blob?: Blob | null
+    ): Promise<PersonalWord | null> => {
+      const current = wordsRef.current.find((w) => w.id === wordId);
+      if (!current) return null;
+
+      if (recording) {
+        await saveRecording(recording, blob ?? null);
+      }
+
+      const prevStatus = current.status;
+      const updated = applyWordAttempt(current, attempt);
+      await idbPut("words", updated);
+      setWords((prev) => [updated, ...prev.filter((w) => w.id !== updated.id)]);
+      setNowMs(Date.now());
+
+      addLog({
+        seconds: Math.max(15, recording?.durationSec ?? 25),
+        mode: "word-bank",
+        completed: 1,
+        scores: attempt.selfScore
+          ? {
+              clarity: attempt.selfScore,
+              pronunciation: attempt.selfScore,
+              fluency: 0,
+              pacing: 0,
+              vocalControl: 0,
+            }
+          : null,
+        overallScore: attempt.score,
+        note: `Word practice: ${updated.word} (${attempt.speedMode})`,
+      });
+
+      if (prevStatus !== "mastered" && updated.status === "mastered") {
+        toast(`Mastered "${updated.word}"! Scheduled spaced review in ${updated.intervalDays}d.`);
+      } else if (prevStatus === "difficult" && updated.status === "learning") {
+        toast(`"${updated.word}" moved to Learning (${updated.masteryScore}/100)!`);
+      } else {
+        toast(`Saved "${updated.word}" attempt — ${attempt.score}/100`);
+      }
+      return updated;
+    },
+    [addLog, saveRecording, toast]
+  );
 
   const deleteRecording = useCallback(async (id: string) => {
     await idbDelete("recordings", id);
@@ -326,13 +516,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     async (includeAudio: boolean) => {
       const payload: ExportPayload = {
         app: "speechcoach",
-        version: 3,
+        version: 4,
         exportedAt: Date.now(),
         settings: settingsRef.current,
         exercises,
         logs,
         recordings,
         debriefs,
+        words,
         blobs: {},
       };
       let skippedAudio = false;
@@ -367,7 +558,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       );
       return { ok: true, skippedAudio };
     },
-    [exercises, logs, recordings, debriefs, setSettings, toast]
+    [exercises, logs, recordings, debriefs, words, setSettings, toast]
   );
 
   const importJSON = useCallback(
@@ -408,16 +599,19 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         }
         await idbClear("debriefs");
         for (const d of p.debriefs ?? []) await idbPut("debriefs", d);
+        await idbClear("words").catch(() => undefined);
+        for (const w of p.words ?? []) await idbPut("words", w);
 
         setSettingsState(mergedSettings);
         setExercises(p.exercises ?? []);
         setLogs(p.logs ?? []);
         setRecordings((p.recordings ?? []).sort((a, b) => b.createdAt - a.createdAt));
         setDebriefs((p.debriefs ?? []).sort((a, b) => b.createdAt - a.createdAt));
+        setWords((p.words ?? []).sort((a, b) => b.updatedAt - a.updatedAt));
         toast(
           `Backup restored: ${p.logs?.length ?? 0} logs, ${(p.recordings ?? []).length} recordings, ${
-            p.exercises?.length ?? 0
-          } exercises`
+            (p.words ?? []).length
+          } words`
         );
         return { ok: true, msg: "Import complete." };
       } catch (e) {
@@ -428,7 +622,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const clearAllData = useCallback(async () => {
-    for (const s of ["kv", "exercises", "logs", "recordings", "blobs", "debriefs"]) {
+    for (const s of ["kv", "exercises", "logs", "recordings", "blobs", "debriefs", "words"]) {
       await idbClear(s).catch(() => undefined);
     }
     setSettingsState(DEFAULT_SETTINGS);
@@ -436,6 +630,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLogs([]);
     setRecordings([]);
     setDebriefs([]);
+    setWords([]);
     void idbPut("kv", { ...DEFAULT_SETTINGS, key: "settings" });
     toast("All local data cleared", "info");
   }, [toast]);
@@ -503,18 +698,31 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const improvement = useMemo(() => computeOverallImprovement(recordings), [recordings]);
   const commonMistakes = useMemo(() => analyzeCommonMistakes(recordings), [recordings]);
 
+  const dueWords = useMemo(
+    () => (nowMs > 0 ? getDueWords(words, nowMs) : words.filter((w) => w.status !== "mastered")),
+    [words, nowMs]
+  );
+  const { weakSounds, weakCombos } = useMemo(() => detectWeakSounds(words, recordings), [words, recordings]);
+  const overallBeforeAfter = useMemo(() => compareOverallBeforeAfter(recordings), [recordings]);
+
   const todayKeyStr = useMemo(() => dateKey(nowMs || undefined), [nowMs]);
+  const customWordExercise = useMemo(() => {
+    if (words.length === 0) return null;
+    const daySeed = todayKeyStr.split("-").reduce((acc, s) => acc + Number(s), 0);
+    return buildCustomWordCoachedExercise(words, daySeed);
+  }, [words, todayKeyStr]);
+
   const todayPlan = useMemo(
-    () => selectDailySession(profile, coachPlan, recordings, debriefs, todayKeyStr),
-    [profile, coachPlan, recordings, debriefs, todayKeyStr]
+    () => selectDailySession(profile, coachPlan, recordings, debriefs, todayKeyStr, customWordExercise),
+    [profile, coachPlan, recordings, debriefs, todayKeyStr, customWordExercise]
   );
 
   const backupDue = useMemo(() => {
     if (!nowMs) return false;
-    if (!settings.lastBackupAt) return logs.length + recordings.length > 0;
+    if (!settings.lastBackupAt) return logs.length + recordings.length + words.length > 0;
     const dismissed = settings.backupDismissedUntil != null && nowMs < settings.backupDismissedUntil;
     return !dismissed && nowMs - settings.lastBackupAt > 7 * 86400000;
-  }, [nowMs, settings.lastBackupAt, settings.backupDismissedUntil, logs.length, recordings.length]);
+  }, [nowMs, settings.lastBackupAt, settings.backupDismissedUntil, logs.length, recordings.length, words.length]);
 
   const value: Store = {
     hydrated,
@@ -526,11 +734,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     logs,
     recordings,
     debriefs,
+    words,
     toasts,
     guidedOpen,
     setGuidedOpen,
     onboardingOpen,
     setOnboardingOpen,
+    addWordModal,
+    openAddWord,
+    openEditWord,
+    closeAddWord,
+    practiceWordId,
+    setPracticeWordId,
     setSettings,
     updateProfile,
     updateCoachPlan,
@@ -539,6 +754,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     addExercise,
     updateExercise,
     deleteExercise,
+    addWord,
+    updateWord,
+    deleteWord,
+    recordWordAttempt,
     addLog,
     saveRecording,
     deleteRecording,
@@ -555,6 +774,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     skillStandings,
     improvement,
     commonMistakes,
+    dueWords,
+    weakSounds,
+    weakCombos,
+    overallBeforeAfter,
+    customWordExercise,
     todayPlan,
     backupDue,
   };

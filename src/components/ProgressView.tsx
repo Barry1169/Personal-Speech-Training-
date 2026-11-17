@@ -44,6 +44,12 @@ export default function ProgressView() {
     skillStandings,
     improvement,
     commonMistakes,
+    words,
+    dueWords,
+    weakSounds,
+    overallBeforeAfter,
+    setPracticeWordId,
+    openAddWord,
     logs,
     recordings,
     debriefs,
@@ -352,6 +358,101 @@ export default function ProgressView() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      {/* Personal Pronunciation Mastery, Weak Sounds & Before vs After */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Card
+          title="Personal Word Mastery & Weak Sounds"
+          sub="Tracks your saved difficult words across spaced-repetition sessions and recurring sound patterns."
+          right={
+            <Btn variant="soft" onClick={() => openAddWord("", "manual")}>
+              + Add Word
+            </Btn>
+          }
+        >
+          <div className="grid gap-3">
+            <div className="grid grid-cols-3 gap-2.5">
+              <div className="rounded-xl bg-[var(--panel2)] p-3">
+                <p className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--bad)]">Difficult</p>
+                <p className="mt-1 font-display text-[20px] font-bold">
+                  {words.filter((w) => w.status === "difficult").length}
+                </p>
+              </div>
+              <div className="rounded-xl bg-[var(--panel2)] p-3">
+                <p className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--warn)]">Learning</p>
+                <p className="mt-1 font-display text-[20px] font-bold">
+                  {words.filter((w) => w.status === "learning").length}
+                </p>
+              </div>
+              <div className="rounded-xl bg-[var(--panel2)] p-3">
+                <p className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--good)]">Mastered</p>
+                <p className="mt-1 font-display text-[20px] font-bold">
+                  {words.filter((w) => w.status === "mastered").length}
+                </p>
+              </div>
+            </div>
+
+            {weakSounds.length > 0 && (
+              <div className="rounded-xl bg-[var(--panel2)] p-3">
+                <SectionLabel>Top Detected Weak Sounds</SectionLabel>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {weakSounds.slice(0, 5).map((ws) => (
+                    <Chip key={ws.sound} tone={ws.severity === "high" ? "bad" : ws.severity === "medium" ? "warn" : "muted"}>
+                      {ws.short} {ws.phonemes}
+                      {ws.avgAccuracy != null ? ` · ${ws.avgAccuracy}%` : ""}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {dueWords.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                <span className="text-[12.5px]">
+                  <strong>{dueWords.length}</strong> word{dueWords.length === 1 ? "" : "s"} due for spaced review:{" "}
+                  <span className="text-[var(--muted)]">{dueWords.slice(0, 3).map((w) => w.word).join(", ")}</span>
+                </span>
+                <Btn variant="soft" onClick={() => setPracticeWordId(dueWords[0].id)}>
+                  Practice →
+                </Btn>
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <Card
+          title="Before vs. After (Original vs. Latest Recording)"
+          sub="Long-term improvement comparing your very first recording against your latest take."
+        >
+          {!overallBeforeAfter ? (
+            <p className="py-10 text-center text-[13px] text-[var(--muted)]">
+              Save at least 2 recordings to compare your original baseline against your latest progress.
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[var(--panel2)] p-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--muted)]">Original → Latest</p>
+                  <p className="font-display text-[20px] font-bold tabular-nums">
+                    {overallBeforeAfter.beforeScore} → {overallBeforeAfter.afterScore} / 100
+                  </p>
+                </div>
+                <Chip tone={overallBeforeAfter.delta > 0 ? "good" : overallBeforeAfter.delta < 0 ? "warn" : "muted"}>
+                  {overallBeforeAfter.delta >= 0 ? `+${overallBeforeAfter.delta}` : overallBeforeAfter.delta} pts
+                </Chip>
+              </div>
+              <div className="grid gap-1.5 text-[12px]">
+                {overallBeforeAfter.improvements.map((line, i) => (
+                  <p key={i} className="text-[var(--good)]">✓ {line}</p>
+                ))}
+                {overallBeforeAfter.remainingFocus.map((line, i) => (
+                  <p key={i} className="text-[var(--muted)]">→ {line}</p>
+                ))}
+              </div>
             </div>
           )}
         </Card>

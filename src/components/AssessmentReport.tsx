@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { DetailedAssessment, DimensionScore, RecordingAnalysis } from "@/lib/types";
+import { normalizeWord } from "@/lib/pronunciation";
 import { speakSingle } from "@/lib/tts";
 import { useStore } from "@/lib/store";
 import { Btn, Chip, Ring, ScoreBar, SectionLabel } from "./ui";
@@ -27,10 +28,15 @@ export default function AssessmentReport({
   onPracticeText?: (title: string, text: string) => void;
   compact?: boolean;
 }) {
-  const { settings } = useStore();
+  const { settings, words, addWord, openAddWord, setPracticeWordId } = useStore();
   const [showFormula, setShowFormula] = useState(false);
   const [drillOpen, setDrillOpen] = useState(false);
   const [drillIdx, setDrillIdx] = useState(0);
+
+  const findSavedWord = (raw: string) => {
+    const norm = normalizeWord(raw);
+    return words.find((w) => w.normalized === norm) ?? null;
+  };
 
   const dims: DimensionScore[] = [
     assessment.dimensions.pronunciation,
@@ -254,6 +260,21 @@ export default function AssessmentReport({
                 <Btn variant="ghost" onClick={() => speakSingle(activeDrillWord.word, 1.0, settings.preferredVoice)}>
                   Hear natural (1.0×)
                 </Btn>
+                {activeDrillWord.kind !== "filler" && (() => {
+                  const saved = findSavedWord(activeDrillWord.word);
+                  return saved ? (
+                    <Btn variant="ghost" onClick={() => setPracticeWordId(saved.id)}>
+                      ✓ In Word Bank · Open Coach
+                    </Btn>
+                  ) : (
+                    <Btn
+                      variant="soft"
+                      onClick={() => addWord(activeDrillWord.word, { source: "assessment", status: "difficult" })}
+                    >
+                      + Save to Word Bank
+                    </Btn>
+                  );
+                })()}
                 <span className="text-[11.5px] text-[var(--muted)]">Say it 3× slowly, then 2× at natural pace.</span>
                 <div className="ml-auto flex gap-1.5">
                   <Btn
@@ -283,29 +304,64 @@ export default function AssessmentReport({
           {/* Problem word list */}
           {problemWords.length > 0 && (
             <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {problemWords.map((pw, idx) => (
-                <div key={`${pw.word}-${idx}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3">
-                  <div className="flex items-center gap-2">
-                    <span className="font-display text-[14px] font-semibold">{pw.word}</span>
-                    <Chip tone={pw.kind === "filler" ? "warn" : pw.kind === "missing" ? "bad" : "accent"}>
-                      {pw.kind}
-                    </Chip>
-                    {pw.phoneticHint && <span className="text-[11px] text-[var(--muted)]">{pw.phoneticHint}</span>}
-                    <button
-                      type="button"
-                      title={`Listen to "${pw.word}"`}
-                      onClick={() => speakSingle(pw.word, 0.82, settings.preferredVoice)}
-                      className="icon-btn ml-auto"
-                    >
-                      <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
-                    </button>
+              {problemWords.map((pw, idx) => {
+                const saved = pw.kind !== "filler" ? findSavedWord(pw.word) : null;
+                return (
+                  <div key={`${pw.word}-${idx}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-display text-[14px] font-semibold">{pw.word}</span>
+                      <Chip tone={pw.kind === "filler" ? "warn" : pw.kind === "missing" ? "bad" : "accent"}>
+                        {pw.kind}
+                      </Chip>
+                      {pw.phoneticHint && <span className="text-[11px] text-[var(--muted)]">{pw.phoneticHint}</span>}
+                      <div className="ml-auto flex items-center gap-1">
+                        {pw.kind !== "filler" && (
+                          saved ? (
+                            <button
+                              type="button"
+                              onClick={() => setPracticeWordId(saved.id)}
+                              className="chip chip-good cursor-pointer hover:brightness-95"
+                              title="Practice this word in your Personal Word Bank"
+                            >
+                              ✓ Saved · Coach
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => addWord(pw.word, { source: "assessment", status: "difficult" })}
+                              className="chip chip-brand cursor-pointer hover:brightness-95"
+                              title="Save directly to your Personal Word Bank"
+                            >
+                              + Save Word
+                            </button>
+                          )
+                        )}
+                        <button
+                          type="button"
+                          title={`Listen to "${pw.word}"`}
+                          onClick={() => speakSingle(pw.word, 0.82, settings.preferredVoice)}
+                          className="icon-btn"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
+                        </button>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-[11.5px] text-[var(--muted)]">{pw.context}</p>
+                    <p className="mt-1 text-[12px] leading-relaxed text-[var(--ink)]">{pw.correctionTip}</p>
                   </div>
-                  <p className="mt-1 text-[11.5px] text-[var(--muted)]">{pw.context}</p>
-                  <p className="mt-1 text-[12px] leading-relaxed text-[var(--ink)]">{pw.correctionTip}</p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3">
+            <span className="text-[12px] text-[var(--muted)]">
+              Stumbled on another word during this take? Save it now so your coach trains it daily.
+            </span>
+            <Btn variant="soft" onClick={() => openAddWord("", "assessment")}>
+              + Add My Word
+            </Btn>
+          </div>
 
           {/* Problematic sentences */}
           {assessment.problemSentences.length > 0 && (
@@ -336,6 +392,17 @@ export default function AssessmentReport({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {problemWords.length === 0 && assessment.problemSentences.length === 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-4 py-3">
+          <span className="text-[12.5px] text-[var(--muted)]">
+            Felt any word catch or sound unclear while speaking? Save it to your Personal Word Bank to drill it daily.
+          </span>
+          <Btn variant="soft" onClick={() => openAddWord("", "assessment")}>
+            + Add My Word
+          </Btn>
         </div>
       )}
     </div>

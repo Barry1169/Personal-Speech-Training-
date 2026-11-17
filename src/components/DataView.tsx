@@ -21,6 +21,7 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
     exercises,
     logs,
     debriefs,
+    words,
     backupDue,
   } = useStore();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -238,14 +239,15 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Your data at a glance">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <div className="stat"><span className="stat-label">Practice time</span><span className="stat-value">{fmtDur(stats.totalSec)}</span></div>
             <div className="stat"><span className="stat-label">Sessions</span><span className="stat-value">{stats.sessionCount}</span></div>
             <div className="stat"><span className="stat-label">Recordings</span><span className="stat-value">{recordings.length}</span></div>
+            <div className="stat"><span className="stat-label">Saved Words</span><span className="stat-value">{words.length}</span></div>
             <div className="stat"><span className="stat-label">Debriefs</span><span className="stat-value">{debriefs.length}</span></div>
           </div>
           <p className="mt-3 text-[12px] text-[var(--muted)]">
-            Storage: {storage} · {logs.length} logs · {exercises.length} custom exercises · IndexedDB “speechcoach” (schema v3)
+            Storage: {storage} · {logs.length} logs · {words.length} word bank entries · {exercises.length} custom exercises · IndexedDB “speechcoach” (schema v4)
           </p>
         </Card>
 

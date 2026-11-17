@@ -454,6 +454,116 @@ export const MATERIAL_TYPE_LABELS: Record<PracticeMaterialType, string> = {
   impromptu: "Impromptu Topics",
 };
 
+// ---------- Personal Pronunciation Word Bank & Weak Sound Intelligence ----------
+
+export type WordStatus = "difficult" | "learning" | "mastered";
+
+export type SoundCategoryKey =
+  | "th"
+  | "r"
+  | "l"
+  | "s_sh"
+  | "v_w"
+  | "p_b_t_d"
+  | "clusters"
+  | "endings"
+  | "vowels";
+
+export const SOUND_CATEGORY_LABELS: Record<SoundCategoryKey, { label: string; short: string; phonemes: string }> = {
+  th: { label: "TH Sounds", short: "TH", phonemes: "/θ/ · /ð/" },
+  r: { label: "R Articulation", short: "R", phonemes: "/ɹ/" },
+  l: { label: "L (Light & Dark)", short: "L", phonemes: "/l/ · /ɫ/" },
+  s_sh: { label: "S / SH / CH Sibilants", short: "S / SH", phonemes: "/s/ · /ʃ/ · /tʃ/" },
+  v_w: { label: "V vs W Contrast", short: "V / W", phonemes: "/v/ · /w/" },
+  p_b_t_d: { label: "Plosives (P / B / T / D / K / G)", short: "P/B/T/D", phonemes: "/p,b,t,d,k,g/" },
+  clusters: { label: "Consonant Clusters", short: "Clusters", phonemes: "str, thr, rld, sts…" },
+  endings: { label: "Final Consonant Release", short: "Endings", phonemes: "-t, -d, -ts, -ks, -st" },
+  vowels: { label: "Vowel Precision & Stress", short: "Vowels", phonemes: "syllable stress" },
+};
+
+export interface WordMouthGuide {
+  tongue: string;
+  lips: string;
+  mouthAirflow: string;
+}
+
+export interface WordAttempt {
+  id: string;
+  ts: number;
+  date: string; // YYYY-MM-DD
+  speedMode: "slow" | "natural";
+  transcript: string;
+  matchedWord: boolean;
+  similarityPct: number; // 0..100 objective string similarity
+  selfScore: number | null; // 1..5 listening self-check
+  score: number; // 0..100 honest combined score
+  evidenceKind: "hybrid" | "measured" | "self";
+  evidence: string;
+  feedback: string;
+  recordingId?: string | null;
+}
+
+export interface PersonalWord {
+  id: string;
+  word: string;
+  normalized: string;
+  status: WordStatus;
+  phonetic: string;
+  ipa: string;
+  ipaSource: "dictionary" | "estimated" | "custom";
+  meaning: string;
+  exampleSentence: string;
+  mouthGuide: WordMouthGuide;
+  soundTags: SoundCategoryKey[];
+  source: "manual" | "assessment" | "exercise";
+  notes?: string;
+  attempts: WordAttempt[];
+  masteryScore: number; // 0..100
+  consecutiveSuccessDays: number;
+  intervalDays: number; // spaced repetition interval in days
+  nextReviewAt: number; // epoch ms when next due
+  lastPracticedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface WeakSoundFinding {
+  sound: SoundCategoryKey;
+  label: string;
+  short: string;
+  phonemes: string;
+  issueCount: number;
+  avgAccuracy: number | null; // 0..100 across words with this sound
+  severity: "high" | "medium" | "watch";
+  sampleWords: string[];
+  placementCue: string;
+  recommendedExerciseIds: string[];
+}
+
+export interface WeakComboFinding {
+  comboKey: string;
+  label: string;
+  words: string[];
+  tip: string;
+}
+
+export interface BeforeAfterComparison {
+  kind: "word" | "overall";
+  beforeLabel: string;
+  afterLabel: string;
+  beforeDate: number;
+  afterDate: number;
+  beforeScore: number;
+  afterScore: number;
+  delta: number;
+  beforeRecordingId?: string | null;
+  afterRecordingId?: string | null;
+  beforeTranscript?: string;
+  afterTranscript?: string;
+  improvements: string[];
+  remainingFocus: string[];
+}
+
 export function dateKey(ts: number = Date.now()): string {
   const d = new Date(ts);
   const m = `${d.getMonth() + 1}`.padStart(2, "0");

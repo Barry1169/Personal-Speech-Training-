@@ -21,9 +21,20 @@ import {
   monthlyReport,
   selectDailySession,
 } from "../adaptiveCoach";
-import { COACHED_MATERIALS, DIAGNOSTIC_EXERCISE } from "../materials";
+import { COACHED_MATERIALS, DIAGNOSTIC_EXERCISE, getCoachedExerciseById } from "../materials";
 import { BUILTIN_EXERCISES, MODES, PROGRAM, SCENARIOS, dayLabel } from "../program";
 import { streaksFromDates, weeklyReport } from "../coach";
+import {
+  analyzeWordEntry,
+  applyWordAttempt,
+  buildCustomWordCoachedExercise,
+  compareWordBeforeAfter,
+  createPersonalWord,
+  detectWeakSounds,
+  evaluateWordAttempt,
+  getDueWords,
+  recommendedPracticeSpeed,
+} from "../pronunciation";
 import {
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
@@ -441,3 +452,193 @@ test("stammering fluency & YouTube creator goals prioritize anti-stammering/came
     "Daily session must include YouTube camera exercises"
   );
 });
+
+test("Personal Pronunciation System: curated & arbitrary word analysis generates phonetics, IPA, sound tags, and anatomical guides", () => {
+  const curated = analyzeWordEntry("thorough");
+  assert.equal(curated.ipaSource, "dictionary");
+  assert.equal(curated.ipa, "/ˈθɜːr.oʊ/");
+  assert.ok(curated.soundTags.includes("th") && curated.soundTags.includes("r"));
+  assert.ok(curated.mouthGuide.tongue.toLowerCase().includes("tongue"));
+
+  const custom = analyzeWordEntry("crystallization");
+  assert.equal(custom.ipaSource, "estimated");
+  assert.ok(custom.phonetic.length > 0 && custom.phonetic.includes("-"));
+  assert.ok(custom.soundTags.includes("r") && custom.soundTags.includes("l") && custom.soundTags.includes("clusters"));
+  assert.ok(custom.exampleSentence.toLowerCase().includes("crystallization"));
+});
+
+test("Personal Pronunciation System: honest attempt evaluation never fabricates 100/100 from STT-only matches", () => {
+  const word = createPersonalWord("thorough", { source: "manual" });
+
+  // STT-only exact match (no self-check) must stay capped <= 85 with explicit honesty note
+  const sttOnly = evaluateWordAttempt({
+    word,
+    speedMode: "natural",
+    transcript: "thorough",
+    selfScore: null,
+  });
+  assert.equal(sttOnly.evidenceKind, "measured");
+  assert.ok(sttOnly.score <= 85 && sttOnly.score >= 70, `Expected honest STT-only score 70..85, got ${sttOnly.score}`);
+  assert.ok(sttOnly.evidence.toLowerCase().includes("capped"));
+
+  // Hybrid match (STT + 5/5 listening self-check) unlocks high confidence >= 92
+  const hybrid = evaluateWordAttempt({
+    word,
+    speedMode: "natural",
+    transcript: "thorough",
+    selfScore: 5,
+  });
+  assert.equal(hybrid.evidenceKind, "hybrid");
+  assert.ok(hybrid.score >= 92, `Expected hybrid high score >= 92, got ${hybrid.score}`);
+
+  // Mispronounced word ("toro") must score low and produce targeted TH guidance
+  const miss = evaluateWordAttempt({
+    word,
+    speedMode: "slow",
+    transcript: "toro",
+    selfScore: 2,
+  });
+  assert.ok(miss.score < 60, `Expected low score for mispronunciation, got ${miss.score}`);
+  assert.ok(miss.feedback.length > 0 && miss.matchedWord === false);
+});
+
+test("Personal Pronunciation System: spaced repetition & multi-day mastery requires consistent natural-speed accuracy and demotes on slips", () => {
+  const baseWord = createPersonalWord("world", { source: "assessment" });
+  assert.equal(baseWord.status, "difficult");
+  assert.equal(recommendedPracticeSpeed(baseWord).mode, "slow");
+
+  // Day 1: strong slow attempt -> moves to learning, NOT mastered yet
+  const d1 = applyWordAttempt(baseWord, {
+    id: "att_1",
+    ts: Date.parse("2026-11-10T10:05:00Z"),
+    date: "2026-11-10",
+    speedMode: "slow",
+    transcript: "world",
+    matchedWord: true,
+    similarityPct: 100,
+    selfScore: 5,
+    score: 88,
+    evidenceKind: "hybrid",
+    evidence: "Clean match + 5/5 self check",
+    feedback: "Move to natural speed.",
+    recordingId: "rec_before",
+  });
+  assert.equal(d1.status, "learning");
+  assert.equal(recommendedPracticeSpeed(d1).mode, "natural");
+
+  // Day 1 second strong natural attempt -> still only 1 distinct day, must NOT prematurely master
+  const d1b = applyWordAttempt(d1, {
+    id: "att_2",
+    ts: Date.parse("2026-11-10T10:15:00Z"),
+    date: "2026-11-10",
+    speedMode: "natural",
+    transcript: "the world changes",
+    matchedWord: true,
+    similarityPct: 100,
+    selfScore: 5,
+    score: 92,
+    evidenceKind: "hybrid",
+    evidence: "Clean match + 5/5 self check",
+    feedback: "Review tomorrow.",
+    recordingId: null,
+  });
+  assert.equal(d1b.status, "learning");
+
+  // Day 2 third strong natural attempt -> multi-day consistency achieved -> MASTERED!
+  const d2 = applyWordAttempt(d1b, {
+    id: "att_3",
+    ts: Date.parse("2026-11-11T10:00:00Z"),
+    date: "2026-11-11",
+    speedMode: "natural",
+    transcript: "the world changes every day",
+    matchedWord: true,
+    similarityPct: 100,
+    selfScore: 5,
+    score: 96,
+    evidenceKind: "hybrid",
+    evidence: "Mastered",
+    feedback: "Maintenance review.",
+    recordingId: "rec_after",
+  });
+  assert.equal(d2.status, "mastered");
+  assert.ok(d2.intervalDays >= 7, `Expected mastered interval >= 7 days, got ${d2.intervalDays}`);
+
+  // Before vs After comparison on this word shows concrete improvement and audio links
+  const ba = compareWordBeforeAfter(d2);
+  assert.ok(ba !== null);
+  assert.equal(ba!.beforeScore, 88);
+  assert.equal(ba!.afterScore, 96);
+  assert.equal(ba!.delta, 8);
+  assert.equal(ba!.beforeRecordingId, "rec_before");
+  assert.equal(ba!.afterRecordingId, "rec_after");
+
+  // Due words check: not due on 2026-11-11, due after nextReviewAt
+  assert.equal(getDueWords([d2], Date.parse("2026-11-11T12:00:00Z")).length, 0);
+  assert.equal(getDueWords([d2], Date.parse("2026-12-01T12:00:00Z")).length, 1);
+
+  // Slip on a later day honestly demotes from mastered -> learning and resets interval to 1 day
+  const slipped = applyWordAttempt(d2, {
+    id: "att_4",
+    ts: Date.parse("2026-11-20T10:00:00Z"),
+    date: "2026-11-20",
+    speedMode: "natural",
+    transcript: "word",
+    matchedWord: false,
+    similarityPct: 60,
+    selfScore: 2,
+    score: 52,
+    evidenceKind: "hybrid",
+    evidence: "Dropped L.",
+    feedback: "Slow down.",
+    recordingId: null,
+  });
+  assert.equal(slipped.status, "learning");
+  assert.equal(slipped.intervalDays, 1);
+});
+
+test("Personal Pronunciation System: Weak Sound Detector & Custom Daily Word Exercise integrate cleanly with selectDailySession", () => {
+  const words = [
+    createPersonalWord("thorough", { source: "assessment" }),
+    createPersonalWord("through", { source: "assessment" }),
+    createPersonalWord("rural", { source: "manual" }),
+    createPersonalWord("world", { source: "manual" }),
+    createPersonalWord("strengths", { source: "manual" }),
+  ];
+
+  const { weakSounds, weakCombos } = detectWeakSounds(words, []);
+  assert.ok(weakSounds.length >= 3, "Expected >= 3 detected weak sound categories");
+  assert.ok(
+    weakSounds.some((s) => s.sound === "th") && weakSounds.some((s) => s.sound === "r"),
+    "Expected TH and R to be detected among weak sounds"
+  );
+  assert.ok(weakCombos.some((c) => c.comboKey === "th_r"), "Expected TH + R combination to be flagged");
+  // Every recommended exercise ID must resolve to a real CoachedExercise
+  for (const finding of weakSounds) {
+    for (const id of finding.recommendedExerciseIds) {
+      assert.ok(getCoachedExerciseById(id), `Recommended exercise ${id} must exist in COACHED_MATERIALS`);
+    }
+  }
+
+  // Build custom daily pronunciation exercise from saved difficult words
+  const customEx = buildCustomWordCoachedExercise(words);
+  assert.ok(customEx !== null, "Expected custom daily word exercise to be built");
+  assert.ok(customEx!.plainText.toLowerCase().includes("thorough"));
+  assert.ok(customEx!.annotatedText.includes("**") && customEx!.annotatedText.includes("∧"));
+
+  // Weave custom word exercise directly into selectDailySession
+  const plan = buildInitialPlan({ ...DEFAULT_PROFILE, dailyMinutes: 15, onboardingCompleted: true }, null);
+  const session = selectDailySession(
+    { ...DEFAULT_PROFILE, dailyMinutes: 15, onboardingCompleted: true },
+    plan,
+    [],
+    [],
+    "2026-11-16",
+    customEx
+  );
+  assert.ok(
+    session.exercises.some((ex) => ex.id === customEx!.id),
+    "Daily session must include the custom saved-words pronunciation drill"
+  );
+  assert.ok(session.coachRationale.length > 0, "Daily session must provide a clear coaching rationale");
+});
+

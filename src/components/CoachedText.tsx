@@ -77,7 +77,7 @@ export default function CoachedText({
   exercise: CoachedExercise;
   compact?: boolean;
 }) {
-  const { settings, setSettings } = useStore();
+  const { settings, setSettings, openAddWord } = useStore();
   const [showCues, setShowCues] = useState(true);
   const [rate, setRate] = useState(settings.ttsRate || 0.9);
   const [briefOpen, setBriefOpen] = useState(!compact);
@@ -150,13 +150,23 @@ export default function CoachedText({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => setShowCues((s) => !s)}
-            className={`chip cursor-pointer ${showCues ? "chip-brand" : "chip-muted"}`}
-          >
-            {showCues ? "Coaching cues: ON" : "Coaching cues: OFF"}
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => openAddWord("", "exercise")}
+              className="chip chip-brand cursor-pointer hover:brightness-95"
+              title="Save a difficult word from this exercise to your Personal Word Bank"
+            >
+              + Add My Word
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCues((s) => !s)}
+              className={`chip cursor-pointer ${showCues ? "chip-brand" : "chip-muted"}`}
+            >
+              {showCues ? "Coaching cues: ON" : "Coaching cues: OFF"}
+            </button>
+          </div>
         </div>
 
         {audio.playing && audio.activeSentence >= 0 && (

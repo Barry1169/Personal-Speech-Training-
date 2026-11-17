@@ -9,11 +9,14 @@ import ModesView from "@/components/ModesView";
 import LibraryView from "@/components/LibraryView";
 import ProgressView from "@/components/ProgressView";
 import DataView from "@/components/DataView";
+import WordBankView from "@/components/WordBankView";
+import AddWordModal from "@/components/AddWordModal";
+import WordPracticeModal from "@/components/WordPracticeModal";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import GuidedSessionModal from "@/components/GuidedSessionModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
-type View = "today" | "breathe" | "record" | "modes" | "library" | "progress" | "data";
+type View = "today" | "breathe" | "record" | "modes" | "words" | "library" | "progress" | "data";
 
 const NAV: { id: View; label: string; icon: React.ReactNode }[] = [
   {
@@ -33,6 +36,16 @@ const NAV: { id: View; label: string; icon: React.ReactNode }[] = [
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
         <path d="M2 4.5h11M2 7.5h8M2 10.5h5" />
         <circle cx="12.5" cy="10.5" r="1.6" />
+      </svg>
+    ),
+  },
+  {
+    id: "words",
+    label: "Words",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <path d="M2.5 3.5h10v7.5H6l-3.5 2V3.5z" />
+        <path d="M5 6.5h5M5 8.8h3.2" />
       </svg>
     ),
   },
@@ -112,12 +125,14 @@ function Shell() {
     profile,
     coachPlan,
     stats,
+    dueWords,
     backupDue,
     toasts,
     guidedOpen,
     setGuidedOpen,
     onboardingOpen,
     setOnboardingOpen,
+    openAddWord,
   } = useStore();
 
   const nav = (v: string) => setView(v as View);
@@ -158,17 +173,30 @@ function Shell() {
                 >
                   {n.icon}
                   <span>{n.label}</span>
+                  {n.id === "words" && dueWords.length > 0 && (
+                    <span className="rounded-full bg-[var(--brand)] px-1.5 py-0.2 text-[10px] font-bold text-white">
+                      {dueWords.length}
+                    </span>
+                  )}
                   {n.id === "data" && backupDue && <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />}
                 </button>
               ))}
             </nav>
           )}
 
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
             {!showOnboarding && (
               <>
                 <button
-                  className="chip chip-brand hidden cursor-pointer sm:inline-flex"
+                  type="button"
+                  onClick={() => openAddWord("", "manual")}
+                  className="btn btn-soft px-2.5 py-1.5 text-[12px]"
+                  title="Add a difficult word to your Personal Word Bank"
+                >
+                  + Add My Word
+                </button>
+                <button
+                  className="chip chip-brand hidden cursor-pointer lg:inline-flex"
                   onClick={() => nav("data")}
                   title="Adaptive coaching level"
                 >
@@ -208,6 +236,7 @@ function Shell() {
               <h1 className="font-display text-[21px] font-bold tracking-tight">
                 {view === "today" && "Daily Training Dashboard"}
                 {view === "modes" && "Practice Studio"}
+                {view === "words" && "Personal Word Bank & Pronunciation Coach"}
                 {view === "record" && "Record & Assess"}
                 {view === "breathe" && "Breathing Trainer"}
                 {view === "library" && "Exercise Library"}
@@ -215,12 +244,13 @@ function Shell() {
                 {view === "data" && "Coach Profile & Local Data"}
               </h1>
               <p className="text-[12.5px] text-[var(--muted)]">
-                {view === "today" && "Your personalized daily coaching plan, streaks, weaknesses, and 12-week curriculum."}
+                {view === "today" && "Your personalized daily coaching plan, streaks, difficult words, weaknesses, and 12-week curriculum."}
                 {view === "modes" && "All 7 coached practice material types with audio models — plus 5 training modes & 6 real-world scenarios."}
-                {view === "record" && "Record, measure pace, fillers, pauses, volume, and vocal pitch (F0), and drill tricky words locally."}
+                {view === "words" && "Save difficult words, practice slow & natural pronunciation with IPA & mouth cues, detect weak sounds, and track spaced-repetition mastery."}
+                {view === "record" && "Record, measure pace, fillers, pauses, volume, and vocal pitch (F0), and save tricky words straight into your Word Bank."}
                 {view === "breathe" && "Guided breath pacing to calm nerves and anchor vocal support before speaking."}
                 {view === "library" && "Your full drill bank: search, filter, favorite, hear audio models, and add custom exercises."}
-                {view === "progress" && "Score trends, training calendar, common mistakes, milestones, recordings, and weekly/monthly reports."}
+                {view === "progress" && "Score trends, training calendar, Before vs. After comparisons, weak sounds, milestones, and weekly/monthly reports."}
                 {view === "data" && "Edit your coach profile, retake your baseline assessment, adjust settings, and export backups."}
               </p>
             </div>
@@ -229,6 +259,7 @@ function Shell() {
               {view === "breathe" && <BreathingTrainer />}
               {view === "record" && <RecordView nav={nav} />}
               {view === "modes" && <ModesView nav={nav} />}
+              {view === "words" && <WordBankView nav={nav} />}
               {view === "library" && <LibraryView nav={nav} />}
               {view === "progress" && <ProgressView />}
               {view === "data" && <DataView nav={nav} />}
@@ -237,24 +268,29 @@ function Shell() {
         )}
       </main>
 
-      {/* Guided Daily Session Modal */}
+      {/* Global Modals: Guided Daily Session, Add/Edit Word, Smart Word Pronunciation Coach */}
       <GuidedSessionModal open={guidedOpen} onClose={() => setGuidedOpen(false)} />
+      <AddWordModal />
+      <WordPracticeModal />
 
       {/* Mobile bottom nav */}
       {!showOnboarding && (
         <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-[var(--line)] bg-[color-mix(in_srgb,var(--panel)_95%,transparent)] backdrop-blur md:hidden">
-          <div className="mx-auto grid max-w-[600px] grid-cols-7">
+          <div className="mx-auto grid max-w-[640px] grid-cols-8">
             {NAV.map((n) => (
               <button
                 key={n.id}
                 onClick={() => nav(n.id)}
-                className={`flex flex-col items-center gap-0.5 py-2 text-[9.5px] font-semibold ${
+                className={`flex flex-col items-center gap-0.5 py-2 text-[9px] font-semibold ${
                   view === n.id ? "text-[var(--brand)]" : "text-[var(--muted)]"
                 }`}
               >
                 {n.icon}
                 <span className="relative truncate max-w-full px-0.5">
                   {n.id === "data" ? "Coach" : n.label}
+                  {n.id === "words" && dueWords.length > 0 && (
+                    <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-[var(--brand)]" />
+                  )}
                   {n.id === "data" && backupDue && <span className="absolute -right-1 -top-1 h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />}
                 </span>
               </button>
