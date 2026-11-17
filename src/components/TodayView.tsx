@@ -199,16 +199,25 @@ function CoachedExerciseCard({
 
       {open && (
         <div className="mt-3 grid gap-4 border-t border-[var(--line)] pt-3">
-          <CoachedText exercise={ex} compact />
-          <div className="flex flex-wrap items-center gap-2">
-            <Timer resetKey={ex.id} seconds={ex.durationSec} onTick={onTick} />
-            <Btn variant="soft" onClick={() => onRecordExercise(ex)}>
-              Record & Evaluate
-            </Btn>
-            <Btn variant={done ? "ghost" : "primary"} onClick={onDone} className="ml-auto">
-              {done ? "Completed ✓" : "Mark done"}
-            </Btn>
-          </div>
+          <CoachedText
+            exercise={ex}
+            compact
+            aboveBriefing={
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3.5 py-2.5">
+                <Btn onClick={() => onRecordExercise(ex)}>
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                    <circle cx="6" cy="4.5" r="3" />
+                    <path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" />
+                  </svg>
+                  Record My Voice
+                </Btn>
+                <Timer resetKey={ex.id} seconds={ex.durationSec} onTick={onTick} />
+                <Btn variant={done ? "ghost" : "soft"} onClick={onDone} className="ml-auto">
+                  {done ? "Completed ✓" : "Mark done"}
+                </Btn>
+              </div>
+            }
+          />
         </div>
       )}
     </div>
@@ -344,7 +353,9 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
   };
 
   const sendScript = (title: string, text: string) => {
-    setSettings({ task: { title, mode: "daily", language: practiceLanguage, script: text } });
+    setSettings({
+      task: { title, mode: "daily", language: practiceLanguage, script: text, loadedAt: Date.now() },
+    });
     nav("record");
   };
 
@@ -359,6 +370,8 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
+        structureSteps: ex.structureSteps,
+        loadedAt: Date.now(),
         coaching: {
           whatToDo: ex.whatToDo,
           howToSpeak: ex.howToSpeak,

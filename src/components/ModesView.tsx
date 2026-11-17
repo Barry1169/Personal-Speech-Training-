@@ -11,33 +11,26 @@ import {
   type Difficulty,
   type PracticeMaterialType,
 } from "@/lib/types";
-import { Btn, Card, Chip, SectionLabel, Textarea } from "./ui";
+import { speakSingle, stopSpeaking } from "@/lib/tts";
+import {
+  Btn,
+  Card,
+  Chip,
+  SectionLabel,
+  Textarea,
+  Timer,
+  WordDrillControls,
+  WordPronunciation,
+} from "./ui";
 import CoachedText from "./CoachedText";
 
 function speak(text: string, rate: number) {
-  try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.rate = rate;
-    u.pitch = 1;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch {
-    /* TTS unavailable */
-  }
+  speakSingle(text, rate, undefined, "en");
 }
 
 function StopTTS() {
   return (
-    <Btn
-      variant="ghost"
-      onClick={() => {
-        try {
-          window.speechSynthesis.cancel();
-        } catch {
-          /* noop */
-        }
-      }}
-    >
+    <Btn variant="ghost" onClick={stopSpeaking}>
       Stop voice
     </Btn>
   );
@@ -129,8 +122,21 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
 
   const isMode = (x: ModeContent | Scenario | null): x is ModeContent => !!x && "usesTTS" in x;
 
+  const previewCardRef = useRef<HTMLDivElement | null>(null);
+
+  const selectMaterialAndReveal = (m: CoachedExercise) => {
+    setSelectedMaterial(m);
+    if (typeof window !== "undefined" && window.innerWidth < 1024) {
+      requestAnimationFrame(() => {
+        previewCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  };
+
   const sendToRecorder = (title: string, script: string, mode: string) => {
-    setSettings({ task: { title, mode, language: practiceLanguage, script } });
+    setSettings({
+      task: { title, mode, language: practiceLanguage, script, loadedAt: Date.now() },
+    });
     toast("Task loaded in the Recorder", "info");
     nav("record");
   };
@@ -146,6 +152,8 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
+        structureSteps: ex.structureSteps,
+        loadedAt: Date.now(),
         coaching: {
           whatToDo: ex.whatToDo,
           howToSpeak: ex.howToSpeak,
@@ -330,7 +338,7 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
                     <button
                       key={m.id}
                       type="button"
-                      onClick={() => setSelectedMaterial(m)}
+                      onClick={() => selectMaterialAndReveal(m)}
                       className={`mode-card p-3.5 ${isSelected ? "mode-card-active" : ""}`}
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -351,18 +359,29 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
               )}
             </div>
 
-            {/* Active Coached Material Workspace */}
-            <Card
-              title={selectedMaterial.title}
-              sub={`${MATERIAL_TYPE_LABELS[selectedMaterial.materialType]} · ${selectedMaterial.difficulty} · target ~${selectedMaterial.targetWpm} WPM`}
-              right={
-                <Btn onClick={() => sendCoachedMaterial(selectedMaterial)}>
-                  Practice & Record →
-                </Btn>
-              }
-            >
-              <CoachedText exercise={selectedMaterial} />
-            </Card>
+            {/* Active Coached Material Workspace — sticky on desktop so preview is always in visible viewport */}
+            <div ref={previewCardRef} className="scroll-mt-16 lg:sticky lg:top-16 lg:self-start">
+              <Card
+                title={selectedMaterial.title}
+                sub={`${MATERIAL_TYPE_LABELS[selectedMaterial.materialType]} · ${selectedMaterial.difficulty} · target ~${selectedMaterial.targetWpm} WPM`}
+              >
+                <CoachedText
+                  exercise={selectedMaterial}
+                  aboveBriefing={
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3.5 py-2.5">
+                      <Btn onClick={() => sendCoachedMaterial(selectedMaterial)}>
+                        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                          <circle cx="6" cy="4.5" r="3" />
+                          <path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" />
+                        </svg>
+                        Record My Voice
+                      </Btn>
+                      <Timer resetKey={selectedMaterial.id} seconds={selectedMaterial.durationSec} />
+                    </div>
+                  }
+                />
+              </Card>
+            </div>
           </div>
         </div>
       )}
@@ -443,6 +462,35 @@ export default function ModesView({ nav }: { nav: (v: string) => void }) {
   );
 }
 
+function ModeWordDrillList({ items }: { items: string[] }) {
+  const { words, openQuickWord } = useStore();
+  // Expand minimal pairs like "ship / sheep" into discrete clickable drill words
+  const allWords = Array.from(
+    new Set(
+      items
+        .flatMap((entry) => entry.split(/\s*\/\s*/g))
+        .map((w) => w.trim())
+        .filter((w) => w.length >= 2 && !w.includes(" "))
+    )
+  );
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {allWords.map((w) => (
+        <div
+          key={w}
+          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3 py-2.5"
+        >
+          <div className="flex flex-wrap items-baseline gap-1.5">
+            <span className="font-display text-[14.5px] font-bold text-[var(--ink)]">{w}</span>
+            <WordPronunciation word={w} language="en" savedWords={words} />
+          </div>
+          <WordDrillControls word={w} language="en" onRecordWord={(wd) => openQuickWord(wd)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ModeWorkspace({
   mode,
   rate,
@@ -469,18 +517,7 @@ function ModeWorkspace({
         </div>
       )}
       {mode.words && (
-        <div className="flex flex-wrap gap-2">
-          {mode.words.map((w, i) => (
-            <span key={i} className="flex items-center gap-2 rounded-lg bg-[var(--panel2)] px-3 py-1.5 text-[13px]">
-              {w}
-              <button className="icon-btn" title="Play" onClick={() => speak(w.replace(/\s*\/\s*/g, ", "), rate)}>
-                <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor">
-                  <path d="M3.5 2.5v9l7-4.5z" />
-                </svg>
-              </button>
-            </span>
-          ))}
-        </div>
+        <ModeWordDrillList items={mode.words} />
       )}
       {mode.topics && (
         <div className="grid gap-2 sm:grid-cols-2">

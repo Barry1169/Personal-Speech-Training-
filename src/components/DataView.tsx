@@ -164,12 +164,33 @@ export default function DataView({ nav }: { nav: (v: string) => void }) {
                 <p className="text-[13px] font-medium">Restore from backup</p>
                 <p className="text-[11.5px] text-[var(--muted)]">Replaces current data with the backup contents (v2–v5 supported, including Hindi &amp; Shadowing).</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Btn variant="soft" onClick={() => void exportJSON(false)}>Text only</Btn>
-                <Btn variant="ghost" onClick={() => fileRef.current?.click()}>Import…</Btn>
+                <Btn
+                  variant="ghost"
+                  onClick={() => {
+                    if (fileRef.current) fileRef.current.value = "";
+                    fileRef.current?.click();
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M8 10.5V2.5M4.5 6L8 2.5 11.5 6" />
+                    <path d="M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" />
+                  </svg>
+                  Upload Backup
+                </Btn>
               </div>
             </div>
-            <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                onFile(e.target.files?.[0] ?? null);
+                e.currentTarget.value = "";
+              }}
+            />
             {importMsg && (
               <p className={`rounded-lg px-3 py-2 text-[12.5px] ${importMsg.ok ? "bg-[color-mix(in_srgb,var(--good)_12%,transparent)] text-[var(--good)]" : "bg-[color-mix(in_srgb,var(--bad)_12%,transparent)] text-[var(--bad)]"}`}>
                 {importMsg.msg}

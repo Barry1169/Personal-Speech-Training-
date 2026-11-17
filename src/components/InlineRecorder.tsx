@@ -408,7 +408,7 @@ export default function InlineRecorder({
                 <circle cx="6" cy="4.5" r="3" />
                 <path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" />
               </svg>
-              Record my voice
+              Record My Voice
             </Btn>
             <Btn variant="ghost" onClick={openManualFallback}>
               No mic right now? Manual transcript check

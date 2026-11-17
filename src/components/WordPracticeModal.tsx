@@ -13,6 +13,7 @@ import { useStore } from "@/lib/store";
 import {
   PRACTICE_LANGUAGE_META,
   SOUND_CATEGORY_LABELS,
+  WORD_PROBLEM_TYPE_LABELS,
   fmtDur,
   langOf,
   uid,
@@ -32,6 +33,8 @@ import {
   SectionLabel,
   Textarea,
   VoiceWaveBars,
+  WordDrillControls,
+  WordPronunciation,
 } from "./ui";
 
 function SavedBlobPlayer({ recordingId, label }: { recordingId: string; label: string }) {
@@ -110,6 +113,8 @@ function WordPracticeWorkspace({
     dueWords,
     recordWordAttempt,
     openEditWord,
+    openFiveRepPractice,
+    openQuickWord,
     setPracticeWordId,
     toast,
   } = useStore();
@@ -438,22 +443,40 @@ function WordPracticeWorkspace({
           </Ring>
 
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-baseline gap-2">
               <h2 className="font-display text-[26px] font-bold leading-tight tracking-tight">{word.word}</h2>
-              <span className="rounded-lg bg-[var(--panel)] px-2.5 py-0.5 text-[14px] font-bold text-[var(--brand)]">
-                {word.phonetic}
-              </span>
-              <span className="font-mono text-[13.5px] text-[var(--muted)]">{word.ipa}</span>
-              <Chip
-                tone={word.status === "mastered" ? "good" : word.status === "learning" ? "warn" : "bad"}
-                className="capitalize"
-              >
-                {word.status}
-              </Chip>
-              {word.ipaSource === "estimated" && <Chip tone="muted">Estimated IPA</Chip>}
+              <WordPronunciation
+                word={word.word}
+                language={wordLang}
+                phonetic={word.customPronunciation || word.phonetic}
+                ipa={word.ipa}
+              />
+              {word.clearedFromActive ? (
+                <Chip tone="good">✓ Cleared (4/5+)</Chip>
+              ) : (
+                <Chip
+                  tone={word.status === "mastered" ? "good" : word.status === "learning" ? "warn" : "bad"}
+                  className="capitalize"
+                >
+                  {word.status}
+                </Chip>
+              )}
+              {word.problemType && (
+                <Chip tone="accent">
+                  {word.problemType === "other" && word.problemTypeOther
+                    ? word.problemTypeOther
+                    : WORD_PROBLEM_TYPE_LABELS[word.problemType]}
+                </Chip>
+              )}
+              {word.difficultPart && <Chip tone="warn">Focus: {word.difficultPart}</Chip>}
             </div>
 
             <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--ink)]">{word.meaning}</p>
+            {word.notes && (
+              <p className="mt-1 text-[12px] text-[var(--muted)]">
+                <strong className="text-[var(--ink)]">My note:</strong> {word.notes}
+              </p>
+            )}
 
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
               {word.soundTags.map((s) => (
@@ -479,17 +502,32 @@ function WordPracticeWorkspace({
             &ldquo;<HighlightWord sentence={word.exampleSentence} target={word.word} />&rdquo;
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Btn variant="soft" onClick={() => speakSingle(word.word, 0.7, preferredVoice, wordLang)}>
-              ▶ Word Slow (0.7×)
+            <WordDrillControls
+              word={word.word}
+              language={wordLang}
+              onRecordWord={(wd) => {
+                onClose();
+                openQuickWord(wd);
+              }}
+            />
+            <Btn
+              variant="soft"
+              onClick={() => {
+                onClose();
+                openFiveRepPractice({
+                  word: word.word,
+                  language: wordLang,
+                  correctionTip: word.mouthGuide.tongue,
+                });
+              }}
+            >
+              Practice 5 Reps
             </Btn>
-            <Btn variant="soft" onClick={() => speakSingle(word.word, 1.0, preferredVoice, wordLang)}>
-              ▶ Word Natural (1.0×)
-            </Btn>
-            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 0.78, preferredVoice, wordLang)}>
-              ▶ Sentence Slow
+            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 0.75, preferredVoice, wordLang)}>
+              ▶ Sentence 0.7x
             </Btn>
             <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 1.0, preferredVoice, wordLang)}>
-              ▶ Sentence Natural
+              ▶ Sentence 1.0x
             </Btn>
           </div>
         </div>

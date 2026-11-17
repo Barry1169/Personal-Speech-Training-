@@ -7,12 +7,24 @@ import { speakSingle, stopSpeaking } from "@/lib/tts";
 import { useStore } from "@/lib/store";
 import {
   SOUND_CATEGORY_LABELS,
+  WORD_PROBLEM_TYPE_LABELS,
   type CoachedExercise,
   type PersonalWord,
   type SoundCategoryKey,
   type WordStatus,
 } from "@/lib/types";
-import { Btn, Card, Chip, Input, ScoreBar, SectionLabel, Stat } from "./ui";
+import {
+  Btn,
+  Card,
+  Chip,
+  InfoToggleBtn,
+  Input,
+  ScoreBar,
+  SectionLabel,
+  Stat,
+  WordDrillControls,
+  WordPronunciation,
+} from "./ui";
 import { AnnotatedScript } from "./CoachedText";
 
 const STARTER_WORDS_EN = [
@@ -84,6 +96,8 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
     deleteWord,
     openAddWord,
     openEditWord,
+    openFiveRepPractice,
+    openQuickWord,
     setPracticeWordId,
     setSettings,
     toast,
@@ -92,32 +106,47 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
   const preferredVoice = practiceLanguage === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
   const starterWords = practiceLanguage === "hi" ? STARTER_WORDS_HI : STARTER_WORDS_EN;
 
-  const [tab, setTab] = useState<"all" | "due" | WordStatus>("all");
+  const [tab, setTab] = useState<"active" | "all" | "due" | WordStatus>("active");
   const [soundFilter, setSoundFilter] = useState<SoundCategoryKey | "all">("all");
   const [query, setQuery] = useState("");
   const [drillSeed, setDrillSeed] = useState(0);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [expandedWordIds, setExpandedWordIds] = useState<Record<string, boolean>>({});
+
+  const toggleWordDetails = (id: string) =>
+    setExpandedWordIds((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const counts = useMemo(() => {
+    let active = 0;
     let difficult = 0;
     let learning = 0;
     let mastered = 0;
     for (const w of words) {
-      if (w.status === "difficult") difficult++;
-      else if (w.status === "learning") learning++;
+      if (!w.clearedFromActive && w.status !== "mastered") active++;
+      if (w.status === "difficult" && !w.clearedFromActive) difficult++;
+      else if (w.status === "learning" && !w.clearedFromActive) learning++;
       else mastered++;
     }
-    return { total: words.length, difficult, learning, mastered, due: dueWords.length };
+    return { total: words.length, active, difficult, learning, mastered, due: dueWords.length };
   }, [words, dueWords.length]);
 
   const filteredWords = useMemo(() => {
     const q = query.trim().toLowerCase();
     const dueSet = new Set(dueWords.map((w) => w.id));
     return words.filter((w) => {
+      if (tab === "active" && (w.clearedFromActive || w.status === "mastered")) return false;
       if (tab === "due" && !dueSet.has(w.id)) return false;
-      if ((tab === "difficult" || tab === "learning" || tab === "mastered") && w.status !== tab) return false;
+      if ((tab === "difficult" || tab === "learning") && (w.status !== tab || w.clearedFromActive)) return false;
+      if (tab === "mastered" && w.status !== "mastered" && !w.clearedFromActive) return false;
       if (soundFilter !== "all" && !w.soundTags.includes(soundFilter)) return false;
-      if (q && !w.word.toLowerCase().includes(q) && !w.meaning.toLowerCase().includes(q) && !w.phonetic.toLowerCase().includes(q)) {
+      if (
+        q &&
+        !w.word.toLowerCase().includes(q) &&
+        !w.meaning.toLowerCase().includes(q) &&
+        !w.phonetic.toLowerCase().includes(q) &&
+        !(w.customPronunciation?.toLowerCase().includes(q) ?? false) &&
+        !(w.notes?.toLowerCase().includes(q) ?? false)
+      ) {
         return false;
       }
       return true;
@@ -140,6 +169,7 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
+        structureSteps: ex.structureSteps,
         coaching: {
           whatToDo: ex.whatToDo,
           howToSpeak: ex.howToSpeak,
@@ -267,11 +297,12 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
             <div className="flex flex-wrap items-center gap-2">
               {(
                 [
-                  { id: "all", label: `All (${counts.total})` },
+                  { id: "active", label: `Active (${counts.active})` },
                   { id: "due", label: `Due Today (${counts.due})` },
                   { id: "difficult", label: `Difficult (${counts.difficult})` },
                   { id: "learning", label: `Learning (${counts.learning})` },
-                  { id: "mastered", label: `Mastered (${counts.mastered})` },
+                  { id: "mastered", label: `Mastered / Cleared (${counts.mastered})` },
+                  { id: "all", label: `All History (${counts.total})` },
                 ] as const
               ).map((t) => (
                 <button
@@ -309,120 +340,200 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
 
             {/* Word Cards Grid */}
             {filteredWords.length === 0 ? (
-              <p className="py-6 text-center text-[13px] text-[var(--muted)]">
-                No saved words match this filter. Try switching categories or click <strong>+ Add My Word</strong>.
-              </p>
+              <div className="py-6 text-center text-[13px] text-[var(--muted)]">
+                {tab === "active" && counts.mastered > 0 ? (
+                  <div className="space-y-2">
+                    <p>
+                      All saved words have been cleared or mastered! Your full attempt history is preserved under{" "}
+                      <strong>Mastered / Cleared</strong>.
+                    </p>
+                    <Btn variant="soft" onClick={() => setTab("all")}>
+                      View All History ({counts.total})
+                    </Btn>
+                  </div>
+                ) : (
+                  <p>
+                    No saved words match this filter. Try switching tabs or click <strong>+ Add My Word</strong>.
+                  </p>
+                )}
+              </div>
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
                 {filteredWords.map((w) => {
                   const isDue = dueWords.some((d) => d.id === w.id);
+                  const detailsOpen = Boolean(expandedWordIds[w.id]);
+                  const problemLabel = w.problemType
+                    ? w.problemType === "other" && w.problemTypeOther
+                      ? w.problemTypeOther
+                      : WORD_PROBLEM_TYPE_LABELS[w.problemType]
+                    : null;
+
                   return (
                     <div
                       key={w.id}
-                      className="flex flex-col justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-4 transition hover:border-[var(--brand)]"
+                      className="flex flex-col justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-4 transition hover:border-[var(--line-strong)]"
                     >
                       <div>
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-display text-[17px] font-bold">{w.word}</span>
-                              <span className="text-[12.5px] font-semibold text-[var(--brand)]">{w.phonetic}</span>
-                              <span className="font-mono text-[11.5px] text-[var(--muted)]">{w.ipa}</span>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-baseline gap-1.5">
+                              <span className="font-display text-[17px] font-bold text-[var(--ink)]">{w.word}</span>
+                              <WordPronunciation
+                                word={w.word}
+                                language={practiceLanguage}
+                                phonetic={w.customPronunciation || w.phonetic}
+                                ipa={w.ipa}
+                              />
                             </div>
-                            <p className="mt-1 line-clamp-2 text-[12px] text-[var(--muted)]">{w.meaning}</p>
                           </div>
-                          <div className="flex items-center gap-1.5">
-                            <Chip
-                              tone={w.status === "mastered" ? "good" : w.status === "learning" ? "warn" : "bad"}
-                              className="capitalize"
-                            >
-                              {w.status}
-                            </Chip>
-                            {isDue && <Chip tone="brand">Due</Chip>}
+                          <div className="flex shrink-0 items-center gap-1.5">
+                            {w.clearedFromActive ? (
+                              <Chip tone="good">✓ Cleared</Chip>
+                            ) : (
+                              <Chip
+                                tone={w.status === "mastered" ? "good" : w.status === "learning" ? "warn" : "bad"}
+                                className="capitalize"
+                              >
+                                {w.status}
+                              </Chip>
+                            )}
+                            {isDue && !w.clearedFromActive && <Chip tone="brand">Due</Chip>}
+                            <InfoToggleBtn
+                              open={detailsOpen}
+                              onClick={() => toggleWordDetails(w.id)}
+                              label={`Details for ${w.word}`}
+                            />
                           </div>
                         </div>
 
-                        <div className="mt-2.5 flex flex-wrap gap-1">
-                          {w.soundTags.slice(0, 4).map((s) => (
+                        {/* Saved personal metadata + sound tags */}
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {problemLabel && <Chip tone="accent">{problemLabel}</Chip>}
+                          {w.difficultPart && <Chip tone="warn">Part: {w.difficultPart}</Chip>}
+                          {w.detectedPronunciation && (
+                            <Chip tone="bad">Heard: &ldquo;{w.detectedPronunciation}&rdquo;</Chip>
+                          )}
+                          {w.soundTags.slice(0, 3).map((s) => (
                             <Chip key={s} tone="muted">
                               {SOUND_CATEGORY_LABELS[s].short}
                             </Chip>
                           ))}
                         </div>
 
+                        {/* Mastery bar */}
                         <div className="mt-3">
                           <div className="mb-1 flex items-center justify-between text-[11px] text-[var(--muted)]">
                             <span>
-                              Mastery: <strong className="text-[var(--ink)]">{w.masteryScore}/100</strong> ({w.attempts.length} take
-                              {w.attempts.length === 1 ? "" : "s"})
+                              Mastery: <strong className="text-[var(--ink)]">{w.masteryScore}/100</strong> (
+                              {w.attempts.length} take{w.attempts.length === 1 ? "" : "s"})
                             </span>
-                            <span>{formatReviewLabel(w)}</span>
+                            <span>{w.clearedFromActive ? "History saved" : formatReviewLabel(w)}</span>
                           </div>
                           <ScoreBar value={w.masteryScore} />
                         </div>
+
+                        {/* Expandable meaning, notes, mouth cue & personal voice recording */}
+                        {detailsOpen && (
+                          <div className="mt-3 space-y-1.5 border-t border-[var(--line)] pt-2.5 text-[12px] leading-relaxed">
+                            <p className="text-[var(--muted)]">
+                              <strong className="text-[var(--ink)]">Meaning:</strong> {w.meaning}
+                            </p>
+                            <p className="text-[var(--muted)]">
+                              <strong className="text-[var(--ink)]">Example:</strong> &ldquo;{w.exampleSentence}&rdquo;
+                            </p>
+                            {w.notes && (
+                              <p className="text-[var(--muted)]">
+                                <strong className="text-[var(--ink)]">Your notes:</strong> {w.notes}
+                              </p>
+                            )}
+                            <p className="text-[11.5px] text-[var(--brand)]">
+                              → {w.mouthGuide.tongue}
+                            </p>
+                            {w.userRecordingBlobKey && (
+                              <AudioCompareBtn
+                                recordingId={w.userRecordingBlobKey}
+                                label="My Saved Pronunciation"
+                              />
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--line)] pt-2.5">
-                        <Btn onClick={() => setPracticeWordId(w.id)}>Practice</Btn>
-                        <Btn
-                          variant="soft"
-                          title="Hear slow pronunciation"
-                          onClick={() => speakSingle(w.word, 0.72, preferredVoice, practiceLanguage)}
-                        >
-                          0.7×
-                        </Btn>
-                        <Btn
-                          variant="ghost"
-                          title="Hear natural pronunciation"
-                          onClick={() => speakSingle(w.word, 1.0, preferredVoice, practiceLanguage)}
-                        >
-                          1.0×
-                        </Btn>
-
-                        <select
-                          aria-label={`Change category for ${w.word}`}
-                          value={w.status}
-                          onChange={(e) => updateWord({ ...w, status: e.target.value as WordStatus })}
-                          className="inp ml-auto w-auto py-1 text-[11.5px]"
-                        >
-                          <option value="difficult">Difficult</option>
-                          <option value="learning">Learning</option>
-                          <option value="mastered">Mastered</option>
-                        </select>
-
-                        <button
-                          type="button"
-                          title="Edit word"
-                          onClick={() => openEditWord(w)}
-                          className="icon-btn"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
-                            <path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z" />
-                          </svg>
-                        </button>
-
-                        {confirmDeleteId === w.id ? (
+                      {/* Standardized per-word audio & practice controls */}
+                      <div className="space-y-2 border-t border-[var(--line)] pt-2.5">
+                        <WordDrillControls
+                          word={w.word}
+                          language={practiceLanguage}
+                          onRecordWord={(wd) => openQuickWord(wd)}
+                        />
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <Btn
-                            variant="danger"
-                            onClick={() => {
-                              deleteWord(w.id);
-                              setConfirmDeleteId(null);
-                            }}
+                            onClick={() =>
+                              openFiveRepPractice({
+                                word: w.word,
+                                language: practiceLanguage,
+                                correctionTip: w.mouthGuide.tongue,
+                              })
+                            }
                           >
-                            Confirm
+                            Practice This Word (5×)
                           </Btn>
-                        ) : (
+                          <Btn variant="soft" onClick={() => setPracticeWordId(w.id)}>
+                            Coach
+                          </Btn>
+
+                          <select
+                            aria-label={`Change category for ${w.word}`}
+                            value={w.status}
+                            onChange={(e) => {
+                              const nextStatus = e.target.value as WordStatus;
+                              updateWord({
+                                ...w,
+                                status: nextStatus,
+                                clearedFromActive: nextStatus === "mastered" ? w.clearedFromActive : false,
+                              });
+                            }}
+                            className="inp ml-auto w-auto py-1 text-[11.5px]"
+                          >
+                            <option value="difficult">Difficult</option>
+                            <option value="learning">Learning</option>
+                            <option value="mastered">Mastered</option>
+                          </select>
+
                           <button
                             type="button"
-                            title="Delete word"
-                            onClick={() => setConfirmDeleteId(w.id)}
-                            className="icon-btn hover:text-[var(--bad)]"
+                            title="Edit word & metadata"
+                            onClick={() => openEditWord(w)}
+                            className="icon-btn"
                           >
                             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
-                              <path d="M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8.5h4.8l.6-8.5" />
+                              <path d="M11.5 2.5l2 2L5 13H3v-2l8.5-8.5z" />
                             </svg>
                           </button>
-                        )}
+
+                          {confirmDeleteId === w.id ? (
+                            <Btn
+                              variant="danger"
+                              onClick={() => {
+                                deleteWord(w.id);
+                                setConfirmDeleteId(null);
+                              }}
+                            >
+                              Confirm
+                            </Btn>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Delete word"
+                              onClick={() => setConfirmDeleteId(w.id)}
+                              className="icon-btn hover:text-[var(--bad)]"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+                                <path d="M3 4.5h10M6 4.5V3h4v1.5M5 4.5l.6 8.5h4.8l.6-8.5" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   );
@@ -454,18 +565,33 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
           }
         >
           <div className="grid gap-4">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">Active words:</span>
-              {customDrill.targetWords.map((w) => (
-                <button
-                  key={w.id}
-                  type="button"
-                  onClick={() => setPracticeWordId(w.id)}
-                  className="chip chip-brand cursor-pointer hover:brightness-95"
-                >
-                  {w.word} ({w.phonetic})
-                </button>
-              ))}
+            <div className="space-y-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                Target Drill Words (with Pronunciation &amp; Speed Audio)
+              </span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {customDrill.targetWords.map((w) => (
+                  <div
+                    key={w.id}
+                    className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-baseline gap-1.5">
+                      <span className="font-display text-[14px] font-bold text-[var(--ink)]">{w.word}</span>
+                      <WordPronunciation
+                        word={w.word}
+                        language={practiceLanguage}
+                        phonetic={w.customPronunciation || w.phonetic}
+                        ipa={w.ipa}
+                      />
+                    </div>
+                    <WordDrillControls
+                      word={w.word}
+                      language={practiceLanguage}
+                      onRecordWord={(wd) => openQuickWord(wd)}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-4">

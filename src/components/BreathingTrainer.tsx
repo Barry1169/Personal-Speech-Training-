@@ -150,10 +150,10 @@ export default function BreathingTrainer() {
           <div
             className="flex h-[210px] w-[210px] items-center justify-center rounded-full"
             style={{
-              background: "radial-gradient(circle at 35% 30%, var(--brand-soft), var(--brand) 70%)",
+              background: "radial-gradient(circle at 35% 30%, var(--brand-solid), var(--brand-solid-end) 75%)",
               transform: `scale(${scale})`,
               transition: state === "running" || state === "paused" ? `transform ${dur}s linear` : "transform .6s ease",
-              boxShadow: "0 10px 40px -8px color-mix(in srgb, var(--brand) 45%, transparent)",
+              boxShadow: "0 10px 40px -8px color-mix(in srgb, var(--brand-solid) 48%, transparent)",
             }}
           >
             <div className="text-center text-white">

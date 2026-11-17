@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import { generateSessionDebrief } from "@/lib/adaptiveCoach";
 import { getCoachedExerciseById } from "@/lib/materials";
@@ -154,14 +155,17 @@ export default function GuidedSessionModal({
   };
 
   const pct = debrief ? 100 : Math.round((stepIdx / totalSteps) * 100);
+  if (typeof document === "undefined") return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-[3px] sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[75] flex items-center justify-center bg-black/55 p-3 backdrop-blur-[3px] sm:p-5"
       onMouseDown={resetAndClose}
     >
       <div
-        className="modal-pop flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-t-2xl bg-[var(--panel)] shadow-2xl sm:rounded-2xl"
+        className="modal-pop flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Top progress header */}
@@ -221,7 +225,7 @@ export default function GuidedSessionModal({
                 <div
                   className="flex h-40 w-40 items-center justify-center rounded-full text-center text-white transition-transform duration-700"
                   style={{
-                    background: "radial-gradient(circle at 35% 30%, var(--brand-soft), var(--brand) 72%)",
+                    background: "radial-gradient(circle at 35% 30%, var(--brand-solid), var(--brand-solid-end) 75%)",
                     transform: breath.active && breath.phase !== "Exhale (6s)" ? "scale(1.16)" : "scale(1)",
                   }}
                 >
@@ -278,33 +282,34 @@ export default function GuidedSessionModal({
                   key={currentExercise.id}
                   resetKey={currentExercise.id}
                   seconds={currentExercise.durationSec}
-                  onComplete={() => toast(`Time's up on "${currentExercise.title}" — great focus!`, "ok")}
                 />
               </div>
 
-              <CoachedText exercise={currentExercise} />
-
-              <div className="border-t border-[var(--line)] pt-4">
-                <SectionLabel>Record & Get Instant Coaching Assessment</SectionLabel>
-                <p className="mt-1 mb-3 text-[12px] text-[var(--muted)]">
-                  Speak the material aloud (or speak spontaneously for impromptu topics) to measure your WPM, fillers, pause rhythm, pitch variety, and specific word accuracy.
-                </p>
-                <InlineRecorder
-                  key={currentExercise.id}
-                  title={currentExercise.title}
-                  mode={currentExercise.materialType === "impromptu" ? "impromptu" : "guided-daily"}
-                  language={currentExercise.language ?? practiceLanguage}
-                  scriptText={currentExercise.plainText || null}
-                  exerciseId={currentExercise.id}
-                  targetWpm={currentExercise.targetWpm}
-                  saveLabel="Save Take & Mark Complete"
-                  compact
-                  onSaved={(rec) => {
-                    setSessionRecs((prev) => [rec, ...prev.filter((r) => r.id !== rec.id)]);
-                    markExerciseComplete(currentExercise.id);
-                  }}
-                />
-              </div>
+              <CoachedText
+                exercise={currentExercise}
+                aboveBriefing={
+                  <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+                    <SectionLabel>Record My Voice &amp; Get Instant Assessment</SectionLabel>
+                    <div className="mt-2.5">
+                      <InlineRecorder
+                        key={currentExercise.id}
+                        title={currentExercise.title}
+                        mode={currentExercise.materialType === "impromptu" ? "impromptu" : "guided-daily"}
+                        language={currentExercise.language ?? practiceLanguage}
+                        scriptText={currentExercise.plainText || null}
+                        exerciseId={currentExercise.id}
+                        targetWpm={currentExercise.targetWpm}
+                        saveLabel="Save Take & Mark Complete"
+                        compact
+                        onSaved={(rec) => {
+                          setSessionRecs((prev) => [rec, ...prev.filter((r) => r.id !== rec.id)]);
+                          markExerciseComplete(currentExercise.id);
+                        }}
+                      />
+                    </div>
+                  </div>
+                }
+              />
             </div>
           )}
 
@@ -429,6 +434,7 @@ export default function GuidedSessionModal({
           )}
         </footer>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
