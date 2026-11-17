@@ -4,6 +4,7 @@ import type {
   PauseStats,
   PitchSample,
   PitchStats,
+  PracticeLanguage,
   ProblemSentence,
   ProblemWord,
   RecordingAnalysis,
@@ -13,12 +14,17 @@ import type {
 } from "./types";
 import { summarizePitch } from "./pitch";
 
+export function hasDevanagari(text: string): boolean {
+  return /[\u0900-\u097F]/.test(text);
+}
+
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[’‘]/g, "'")
     .split(/\s+/)
-    .map((w) => w.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+    // Preserve Unicode combining marks (\p{M}) so Devanagari matras, halants, and anusvara stay intact
+    .map((w) => w.replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, ""))
     .filter(Boolean);
 }
 
@@ -35,6 +41,17 @@ const FILLER_PATTERNS: [string, RegExp][] = [
   ["i mean", /\bi mean\b/g],
 ];
 
+const HINDI_FILLER_PATTERNS: [string, RegExp][] = [
+  ["मतलब (matlab)", /(?:^|[\s।,.!?])मतलब(?=$|[\s।,.!?])|\bmatlab\b/gi],
+  ["अं / हम्म (uh/hmm)", /(?:^|[\s।,.!?])(अं+|हम्म+|उम्म+)(?=$|[\s।,.!?])|\bhmm+\b/gi],
+  ["बेसिकली (basically)", /(?:^|[\s।,.!?])बेसिकली(?=$|[\s।,.!?])|\bbasically\b/gi],
+  ["एक्चुअली (actually)", /(?:^|[\s।,.!?])एक्चुअली(?=$|[\s।,.!?])|\bactually\b/gi],
+  ["तो मतलब (so like)", /तो\s+मतलब/gi],
+  ["वो क्या है (filler)", /वो\s+क्या\s+है/gi],
+  ["अच्छा तो (filler)", /अच्छा\s+तो/gi],
+  ["um / uh", /\b(um+|umm+|uh+|uhh+|erm+)\b/gi],
+];
+
 export interface TranscriptStats {
   wordCount: number;
   wpm: number | null;
@@ -43,17 +60,23 @@ export interface TranscriptStats {
   repeats: string[];
 }
 
-export function analyzeTranscript(text: string, durationSec: number): TranscriptStats {
+export function analyzeTranscript(
+  text: string,
+  durationSec: number,
+  language?: PracticeLanguage
+): TranscriptStats {
   const words = tokenize(text);
   const wpm =
     words.length > 0 && durationSec > 3
       ? Math.round(words.length / (durationSec / 60))
       : null;
 
+  const isHindi = language === "hi" || (!language && hasDevanagari(text));
   const norm = text.toLowerCase();
   const fillers: Record<string, number> = {};
   let fillerTotal = 0;
-  for (const [label, re] of FILLER_PATTERNS) {
+  const patterns = isHindi ? HINDI_FILLER_PATTERNS : FILLER_PATTERNS;
+  for (const [label, re] of patterns) {
     const m = norm.match(re);
     if (m && m.length > 0) {
       fillers[label] = m.length;
@@ -267,9 +290,10 @@ export function buildAnalysis(
   durationSec: number,
   tl: VolumeSample[],
   comparison: Comparison | null,
-  pitchSamples?: PitchSample[]
+  pitchSamples?: PitchSample[],
+  language?: PracticeLanguage
 ): RecordingAnalysis {
-  const t = analyzeTranscript(transcript, durationSec);
+  const t = analyzeTranscript(transcript, durationSec, language);
   const volume = analyzeVolume(tl);
   const pauses = analyzePauses(tl, durationSec);
   const pitch = pitchSamples ? summarizePitch(pitchSamples) : null;
@@ -298,6 +322,42 @@ export function buildAnalysis(
 // ---- Phonetic & Delivery Hints for Specific Problem Words ----
 
 function phoneticCoachingForWord(word: string): { correctionTip: string; phoneticHint?: string } {
+  if (hasDevanagari(word)) {
+    if (/[\u094D]/.test(word)) {
+      return {
+        phoneticHint: "Hindi conjunct (Samyuktakshar)",
+        correctionTip: `"${word}" contains a half-letter conjunct. Slow down 20% and glide lightly through the joined consonants without locking your tongue.`,
+      };
+    }
+    if (/[खघछझठढथधफभ]/.test(word)) {
+      return {
+        phoneticHint: "Hindi aspirated (Mahaprana)",
+        correctionTip: `Release a gentle, clear puff of breath on the aspirated consonant in "${word}" — don't squeeze your throat or flatten it into an unaspirated sound.`,
+      };
+    }
+    if (/[टठडढणड़ढ़]/.test(word)) {
+      return {
+        phoneticHint: "Hindi retroflex (Murdhanya)",
+        correctionTip: `Curl your tongue tip gently back toward the roof of your mouth for "${word}" instead of touching behind your teeth.`,
+      };
+    }
+    if (/[शष]/.test(word)) {
+      return {
+        phoneticHint: "Hindi sh / s contrast",
+        correctionTip: `Keep "${word}" crisp by separating palatal "श/ष" (mid-tongue raised, soft hush) from plain dental "स".`,
+      };
+    }
+    if (/[ंँ]/.test(word)) {
+      return {
+        phoneticHint: "Hindi nasalization (Anusvara)",
+        correctionTip: `Let a gentle nasal resonance flow through "${word}" without stopping the breath stream.`,
+      };
+    }
+    return {
+      phoneticHint: "Hindi syllable clarity",
+      correctionTip: `Speak "${word}" with even vowel length (matras) and relaxed jaw — don't swallow the ending syllable.`,
+    };
+  }
   const w = word.toLowerCase();
   if (/th/.test(w)) {
     return {
@@ -418,7 +478,7 @@ export function splitSentences(text: string): string[] {
   return text
     .replace(/\s+/g, " ")
     .trim()
-    .split(/(?<=[.!?])\s+/)
+    .split(/(?<=[.!?।॥])\s+/)
     .map((s) => s.trim())
     .filter((s) => tokenize(s).length >= 3);
 }

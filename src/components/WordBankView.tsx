@@ -15,7 +15,7 @@ import {
 import { Btn, Card, Chip, Input, ScoreBar, SectionLabel, Stat } from "./ui";
 import { AnnotatedScript } from "./CoachedText";
 
-const STARTER_WORDS = [
+const STARTER_WORDS_EN = [
   "thorough",
   "rural",
   "literally",
@@ -24,6 +24,17 @@ const STARTER_WORDS = [
   "subscribe",
   "strengths",
   "specifically",
+];
+
+const STARTER_WORDS_HI = [
+  "स्पष्ट",
+  "प्रयत्न",
+  "विश्वास",
+  "आत्मविश्वास",
+  "धैर्य",
+  "प्रभावशाली",
+  "दृष्टिकोण",
+  "उदाहरण",
 ];
 
 function AudioCompareBtn({ recordingId, label }: { recordingId: string; label: string }) {
@@ -61,6 +72,7 @@ function AudioCompareBtn({ recordingId, label }: { recordingId: string; label: s
 export default function WordBankView({ nav }: { nav: (v: string) => void }) {
   const {
     nowMs,
+    practiceLanguage,
     settings,
     words,
     dueWords,
@@ -76,6 +88,9 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
     setSettings,
     toast,
   } = useStore();
+
+  const preferredVoice = practiceLanguage === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
+  const starterWords = practiceLanguage === "hi" ? STARTER_WORDS_HI : STARTER_WORDS_EN;
 
   const [tab, setTab] = useState<"all" | "due" | WordStatus>("all");
   const [soundFilter, setSoundFilter] = useState<SoundCategoryKey | "all">("all");
@@ -110,8 +125,8 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
   }, [words, dueWords, tab, soundFilter, query]);
 
   const customDrill = useMemo(
-    () => generateCustomWordDrillContent(words, drillSeed),
-    [words, drillSeed]
+    () => generateCustomWordDrillContent(words, drillSeed, practiceLanguage),
+    [words, drillSeed, practiceLanguage]
   );
 
   const launchExerciseInRecorder = (ex: CoachedExercise) => {
@@ -119,7 +134,9 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
       task: {
         title: ex.title,
         mode: "pronunciation",
+        language: ex.language ?? practiceLanguage,
         script: ex.plainText,
+        romanizedText: ex.romanizedText,
         exerciseId: ex.id,
         targetWpm: ex.targetWpm,
         annotatedText: ex.annotatedText,
@@ -141,10 +158,12 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
     const names = customDrill.targetWords.map((w) => w.word);
     setSettings({
       task: {
-        title: `My Word Bank Paragraph (${names.slice(0, 3).join(", ")})`,
+        title: `${practiceLanguage === "hi" ? "My Hindi Word Bank Paragraph" : "My Word Bank Paragraph"} (${names.slice(0, 3).join(", ")})`,
         mode: "pronunciation",
+        language: practiceLanguage,
         script: customDrill.paragraph,
-        targetWpm: 112,
+        romanizedText: customDrill.romanizedParagraph,
+        targetWpm: practiceLanguage === "hi" ? 108 : 112,
         annotatedText: customDrill.annotatedParagraph,
         coaching: {
           whatToDo: `Read this custom paragraph built from your personal difficult words: ${names.join(", ")}.`,
@@ -211,16 +230,16 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
       {/* Empty state quick-starter suggestions */}
       {words.length === 0 && (
         <Card
-          title="Start your Personal Word Bank"
+          title={`Start your ${practiceLanguage === "hi" ? "Hindi (हिन्दी)" : "English"} Word Bank`}
           sub="Add your own tricky words above, or tap any common trouble word below to try Smart Pronunciation Practice immediately."
         >
           <div className="flex flex-wrap gap-2">
-            {STARTER_WORDS.map((sw) => (
+            {starterWords.map((sw) => (
               <button
                 key={sw}
                 type="button"
                 onClick={() => {
-                  const res = addWord(sw, { source: "manual", status: "difficult" });
+                  const res = addWord(sw, { language: practiceLanguage, source: "manual", status: "difficult" });
                   setPracticeWordId(res.word.id);
                 }}
                 className="chip chip-brand cursor-pointer px-3 py-1.5 text-[12.5px] hover:brightness-95"
@@ -348,14 +367,14 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
                         <Btn
                           variant="soft"
                           title="Hear slow pronunciation"
-                          onClick={() => speakSingle(w.word, 0.72, settings.preferredVoice)}
+                          onClick={() => speakSingle(w.word, 0.72, preferredVoice, practiceLanguage)}
                         >
                           0.7×
                         </Btn>
                         <Btn
                           variant="ghost"
                           title="Hear natural pronunciation"
-                          onClick={() => speakSingle(w.word, 1.0, settings.preferredVoice)}
+                          onClick={() => speakSingle(w.word, 1.0, preferredVoice, practiceLanguage)}
                         >
                           1.0×
                         </Btn>
@@ -424,7 +443,7 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
               <Btn variant="ghost" onClick={() => setDrillSeed((s) => s + 1)}>
                 Shuffle Words
               </Btn>
-              <Btn variant="soft" onClick={() => speakSingle(customDrill.paragraph, 0.86, settings.preferredVoice)}>
+              <Btn variant="soft" onClick={() => speakSingle(customDrill.paragraph, 0.86, preferredVoice, practiceLanguage)}>
                 ▶ Hear Model
               </Btn>
               <Btn variant="ghost" onClick={stopSpeaking}>
@@ -467,7 +486,7 @@ export default function WordBankView({ nav }: { nav: (v: string) => void }) {
                   <button
                     type="button"
                     className="chip chip-muted cursor-pointer hover:text-[var(--ink)]"
-                    onClick={() => speakSingle(s, 0.85, settings.preferredVoice)}
+                    onClick={() => speakSingle(s, 0.85, preferredVoice, practiceLanguage)}
                   >
                     ▶ Hear
                   </button>

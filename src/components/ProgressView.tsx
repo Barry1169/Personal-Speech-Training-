@@ -38,6 +38,9 @@ function downloadText(name: string, text: string, mime = "text/plain") {
 
 export default function ProgressView() {
   const {
+    practiceLanguage,
+    setPracticeLanguage,
+    langSummaries,
     stats,
     badges,
     skillAverages,
@@ -183,8 +186,8 @@ export default function ProgressView() {
         String(l.scores?.vocalControl ?? ""),
       ]);
     }
-    downloadText(`speechcoach-logs-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
-    toast("Logs CSV downloaded");
+    downloadText(`speechcoach-logs-${practiceLanguage}-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
+    toast(`${practiceLanguage === "hi" ? "Hindi" : "English"} logs CSV downloaded`);
   };
 
   const exportRecsCsv = () => {
@@ -231,13 +234,70 @@ export default function ProgressView() {
         String(r.self?.vocalControl ?? ""),
       ]);
     }
-    downloadText(`speechcoach-recordings-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
-    toast("Recordings CSV downloaded");
+    downloadText(`speechcoach-recordings-${practiceLanguage}-${new Date().toISOString().slice(0, 10)}.csv`, rows.map((r) => r.join(",")).join("\n"), "text/csv");
+    toast(`${practiceLanguage === "hi" ? "Hindi" : "English"} recordings CSV downloaded`);
   };
 
   return (
     <div className="grid gap-5">
-      {/* Stat tiles */}
+      {/* Separate Language Progress Switcher (English vs. Hindi) */}
+      <Card
+        title="Separate Language Progress"
+        sub="English and Hindi speaking metrics, streaks, adaptive plans, Word Bank mastery, and recording histories are tracked completely independently."
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(["en", "hi"] as const).map((lang) => {
+            const sum = langSummaries[lang];
+            const active = practiceLanguage === lang;
+            return (
+              <button
+                key={lang}
+                type="button"
+                onClick={() => setPracticeLanguage(lang)}
+                className={`rounded-xl border p-4 text-left transition ${
+                  active
+                    ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_8%,var(--panel))] shadow-sm"
+                    : "border-[var(--line)] bg-[var(--panel2)] hover:border-[var(--brand)]/50"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display text-[16px] font-bold">
+                      {lang === "hi" ? "Hindi · हिन्दी" : "English"}
+                    </span>
+                    {active && <Chip tone="brand">Viewing</Chip>}
+                  </div>
+                  <span className="font-display text-[17px] font-bold text-[var(--brand)]">
+                    {sum.avgScore != null ? `${sum.avgScore}/100` : "No score"}
+                  </span>
+                </div>
+                <div className="mt-2.5 grid grid-cols-4 gap-2 text-[11.5px]">
+                  <div>
+                    <p className="text-[var(--muted)]">Streak</p>
+                    <p className="font-semibold text-[var(--ink)]">{sum.currentStreak}d</p>
+                  </div>
+                  <div>
+                    <p className="text-[var(--muted)]">Takes</p>
+                    <p className="font-semibold text-[var(--ink)]">{sum.recordingCount}</p>
+                  </div>
+                  <div>
+                    <p className="text-[var(--muted)]">Time</p>
+                    <p className="font-semibold text-[var(--ink)]">{fmtDur(sum.totalSec)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[var(--muted)]">Words</p>
+                    <p className="font-semibold text-[var(--ink)]">
+                      {sum.masteredWords}/{sum.wordCount}
+                    </p>
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Stat tiles (for active language) */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Stat label="Practice time" value={fmtDur(stats.totalSec)} sub={`${stats.sessionCount} sessions`} />
         <Stat label="Current streak" value={`${stats.currentStreak}d`} sub={`best ${stats.bestStreak}d`} tone="accent" />

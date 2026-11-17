@@ -1,3 +1,38 @@
+export type PracticeLanguage = "en" | "hi";
+
+export const PRACTICE_LANGUAGE_META: Record<
+  PracticeLanguage,
+  {
+    code: PracticeLanguage;
+    label: string;
+    nativeLabel: string;
+    shortLabel: string;
+    bcp47: string;
+    defaultTargetWpm: number;
+  }
+> = {
+  en: {
+    code: "en",
+    label: "English",
+    nativeLabel: "English",
+    shortLabel: "EN",
+    bcp47: "en-US",
+    defaultTargetWpm: 130,
+  },
+  hi: {
+    code: "hi",
+    label: "Hindi",
+    nativeLabel: "हिन्दी",
+    shortLabel: "HI",
+    bcp47: "hi-IN",
+    defaultTargetWpm: 120,
+  },
+};
+
+export function langOf(item?: { language?: PracticeLanguage } | null): PracticeLanguage {
+  return item?.language === "hi" ? "hi" : "en";
+}
+
 export type SkillKey = "clarity" | "pronunciation" | "fluency" | "pacing" | "vocalControl";
 
 export type CoachSkillKey =
@@ -144,6 +179,7 @@ export interface Recording {
   createdAt: number;
   title: string;
   mode: string;
+  language?: PracticeLanguage; // defaults to "en" for legacy recordings
   scriptText: string | null;
   transcript: string;
   durationSec: number;
@@ -162,6 +198,7 @@ export interface PracticeLog {
   id: string;
   ts: number;
   date: string; // YYYY-MM-DD
+  language?: PracticeLanguage; // defaults to "en" for legacy logs
   seconds: number;
   mode: string;
   completed: number; // exercises completed
@@ -184,6 +221,7 @@ export type PracticeMaterialType =
 export interface CoachedExercise {
   id: string;
   title: string;
+  language?: PracticeLanguage; // defaults to "en"
   materialType: PracticeMaterialType;
   difficulty: Difficulty;
   skills: CoachSkillKey[];
@@ -199,6 +237,8 @@ export interface CoachedExercise {
   annotatedText: string;
   /** Clean text for script comparison and TTS model playback */
   plainText: string;
+  /** Optional Romanized / Hinglish reading helper for Hindi scripts */
+  romanizedText?: string;
   /** Optional conversation prompts or impromptu bullet framework */
   structureSteps?: string[];
   /** Optional specialty tags for targeted routines */
@@ -209,6 +249,7 @@ export interface CoachedExercise {
 export interface Exercise {
   id: string;
   name: string;
+  language?: PracticeLanguage;
   category: string;
   instructions: string;
   material: string[];
@@ -262,6 +303,7 @@ export interface SessionDebrief {
   id: string;
   createdAt: number;
   date: string; // YYYY-MM-DD
+  language?: PracticeLanguage; // defaults to "en"
   durationSec: number;
   exercisesCompleted: string[]; // exercise titles
   exerciseIds: string[];
@@ -283,7 +325,9 @@ export interface SessionDebrief {
 export interface ActiveTask {
   title: string;
   mode: string;
+  language?: PracticeLanguage;
   script: string;
+  romanizedText?: string;
   exerciseId?: string;
   targetWpm?: number;
   annotatedText?: string;
@@ -298,6 +342,8 @@ export interface ActiveTask {
 
 export interface Settings {
   theme: "light" | "dark";
+  practiceLanguage?: PracticeLanguage; // active language: "en" | "hi"
+  showHindiRomanized?: boolean; // toggle Romanized Hinglish guide under Devanagari scripts
   dailyGoalMin: number;
   difficulty: "easy" | "standard" | "intensive";
   currentDay: number; // 1..84
@@ -308,9 +354,11 @@ export interface Settings {
   breathing: { inhale: number; hold: number; exhale: number };
   ttsRate: number;
   preferredVoice?: string | null;
+  preferredVoiceHi?: string | null;
   task: ActiveTask | null;
   profile?: UserProfile;
   coachPlan?: CoachPlan;
+  coachPlanByLang?: Partial<Record<PracticeLanguage, CoachPlan>>;
 }
 
 export const DEFAULT_PROFILE: UserProfile = {
@@ -346,6 +394,8 @@ export const DEFAULT_COACH_PLAN: CoachPlan = {
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: "light",
+  practiceLanguage: "en",
+  showHindiRomanized: true,
   dailyGoalMin: 15,
   difficulty: "standard",
   currentDay: 1,
@@ -356,9 +406,19 @@ export const DEFAULT_SETTINGS: Settings = {
   breathing: { inhale: 3, hold: 4, exhale: 6 },
   ttsRate: 0.9,
   preferredVoice: null,
+  preferredVoiceHi: null,
   task: null,
   profile: DEFAULT_PROFILE,
   coachPlan: DEFAULT_COACH_PLAN,
+  coachPlanByLang: {
+    en: DEFAULT_COACH_PLAN,
+    hi: {
+      ...DEFAULT_COACH_PLAN,
+      targetWpmMin: 100,
+      targetWpmMax: 128,
+      adjustmentNote: "Initial Hindi speech plan created. Hindi progress and adaptive level track independently from English.",
+    },
+  },
 };
 
 export interface Toast {
@@ -467,7 +527,14 @@ export type SoundCategoryKey =
   | "p_b_t_d"
   | "clusters"
   | "endings"
-  | "vowels";
+  | "vowels"
+  // Hindi-specific articulation groups
+  | "mahaprana"
+  | "murdhanya"
+  | "dantya"
+  | "sibilants_hi"
+  | "samyuktakshar"
+  | "anusvara";
 
 export const SOUND_CATEGORY_LABELS: Record<SoundCategoryKey, { label: string; short: string; phonemes: string }> = {
   th: { label: "TH Sounds", short: "TH", phonemes: "/θ/ · /ð/" },
@@ -479,6 +546,12 @@ export const SOUND_CATEGORY_LABELS: Record<SoundCategoryKey, { label: string; sh
   clusters: { label: "Consonant Clusters", short: "Clusters", phonemes: "str, thr, rld, sts…" },
   endings: { label: "Final Consonant Release", short: "Endings", phonemes: "-t, -d, -ts, -ks, -st" },
   vowels: { label: "Vowel Precision & Stress", short: "Vowels", phonemes: "syllable stress" },
+  mahaprana: { label: "Hindi Aspirated (Mahaprana)", short: "ख/घ/थ/ध/फ", phonemes: "ख, घ, छ, ठ, थ, ध, फ, भ" },
+  murdhanya: { label: "Hindi Retroflex (Murdhanya)", short: "ट/ड/ण/ड़", phonemes: "ट, ठ, ड, ढ, ण, ड़, ढ़" },
+  dantya: { label: "Hindi Dental (Dantya)", short: "त/थ/द/ध", phonemes: "त, थ, द, ध, न" },
+  sibilants_hi: { label: "Hindi Sibilants (Sh / S)", short: "श/ष/स", phonemes: "श, ष, स" },
+  samyuktakshar: { label: "Hindi Conjuncts (Samyuktakshar)", short: "संयुक्त", phonemes: "क्ष, त्र, ज्ञ, श्र, प्र, स्त" },
+  anusvara: { label: "Hindi Nasalization (Anusvara)", short: "अं/अँ", phonemes: "ं · ँ" },
 };
 
 export interface WordMouthGuide {
@@ -507,6 +580,7 @@ export interface PersonalWord {
   id: string;
   word: string;
   normalized: string;
+  language?: PracticeLanguage; // defaults to "en"
   status: WordStatus;
   phonetic: string;
   ipa: string;
@@ -562,6 +636,73 @@ export interface BeforeAfterComparison {
   afterTranscript?: string;
   improvements: string[];
   remainingFocus: string[];
+}
+
+// ---------- Speaker Shadowing Studio (Reference Audio + Delivery Matching) ----------
+
+export interface SpeakerAcousticProfile {
+  totalDurationSec: number;
+  activeDurationSec: number;
+  startSec: number; // first active speech boundary
+  endSec: number; // last active speech boundary
+  estimatedWpm: number | null;
+  medianPitchHz: number | null;
+  pitchRangeSt: number; // p90-p10 semitone range
+  voicedRatio: number; // 0..1
+  speechDutyCycle: number; // 0..1 fraction of active window spent speaking vs pausing
+  pauseCount: number;
+  /** Normalized pause windows inside active speech [start01, end01] */
+  pauses: { start: number; end: number; durMs: number }[];
+  /** 64-bin normalized energy contour (0..1) over active speech */
+  energyContour: number[];
+  /** 64-bin speaker-normalized pitch melody in semitones relative to speaker's own median F0 (null = unvoiced/pause) */
+  pitchContourSt: (number | null)[];
+  /** Normalized indices (0..1) of major emphasis peaks */
+  emphasisPeaks: number[];
+}
+
+export interface ShadowComparison {
+  overallMatch: number; // 0..100 honest acoustic delivery match
+  paceScore: number; // 0..100
+  rhythmScore: number; // 0..100 (pause placement & speech-to-pause ratio)
+  intonationScore: number; // 0..100 (speaker-normalized pitch melody similarity)
+  emphasisScore: number; // 0..100 (volume/energy contour match)
+  wordMatchPct: number | null; // 0..100 optional transcript match if captured
+  paceRatioPct: number; // e.g. 112 means user was 12% faster than speaker
+  pitchSpanDiffSt: number; // user pitchRangeSt - ref pitchRangeSt
+  strengths: string[];
+  improvements: string[];
+  summary: string;
+}
+
+export interface ShadowAttempt {
+  id: string;
+  ts: number;
+  date: string;
+  playbackRateUsed: number;
+  mode: "echo" | "simultaneous";
+  transcript: string;
+  audioBlobKey: string;
+  mimeType: string;
+  profile: SpeakerAcousticProfile;
+  comparison: ShadowComparison;
+}
+
+export interface ShadowItem {
+  id: string;
+  title: string;
+  language: PracticeLanguage;
+  script: string;
+  romanizedText?: string;
+  speakerNotes?: string;
+  audioBlobKey: string;
+  mimeType: string;
+  fileName: string;
+  profile: SpeakerAcousticProfile;
+  attempts: ShadowAttempt[];
+  bestScore: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export function dateKey(ts: number = Date.now()): string {

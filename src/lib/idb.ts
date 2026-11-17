@@ -2,7 +2,7 @@
 // SpeechCoach stores everything locally so progress survives app updates and works offline.
 
 const DB_NAME = "speechcoach";
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -46,6 +46,13 @@ function getDB(): Promise<IDBDatabase> {
           const w = db.createObjectStore("words", { keyPath: "id" });
           w.createIndex("normalized", "normalized", { unique: false });
           w.createIndex("status", "status", { unique: false });
+        }
+      }
+      // ---- Migration to v5: speaker shadowing clips ----
+      if (old < 5) {
+        if (!db.objectStoreNames.contains("shadowItems")) {
+          const sh = db.createObjectStore("shadowItems", { keyPath: "id" });
+          sh.createIndex("createdAt", "createdAt", { unique: false });
         }
       }
       // Future migrations: add `if (old < N)` blocks here. Existing data is never dropped.

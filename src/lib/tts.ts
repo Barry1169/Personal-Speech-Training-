@@ -1,30 +1,78 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { splitSentences } from "./analytics";
+import { hasDevanagari, splitSentences } from "./analytics";
+import type { PracticeLanguage } from "./types";
 
 export interface VoiceOption {
   name: string;
   lang: string;
 }
 
-export function speakSingle(text: string, rate = 0.9, voiceName?: string | null) {
+function resolveLang(text: string, language?: PracticeLanguage): PracticeLanguage {
+  if (language) return language;
+  return hasDevanagari(text) ? "hi" : "en";
+}
+
+function pickBestVoice(
+  allVoices: SpeechSynthesisVoice[],
+  lang: PracticeLanguage,
+  preferredName?: string | null
+): SpeechSynthesisVoice | undefined {
+  if (preferredName) {
+    const exact = allVoices.find((v) => v.name === preferredName);
+    if (exact && exact.lang.toLowerCase().startsWith(lang)) return exact;
+  }
+  if (lang === "hi") {
+    return (
+      allVoices.find((v) => v.lang.toLowerCase() === "hi-in") ??
+      allVoices.find((v) => v.lang.toLowerCase().startsWith("hi"))
+    );
+  }
+  return (
+    allVoices.find((v) => v.lang.startsWith("en-US") || v.lang.startsWith("en-GB")) ??
+    allVoices.find((v) => v.lang.toLowerCase().startsWith("en"))
+  );
+}
+
+export function speakSingle(
+  text: string,
+  rate = 0.9,
+  voiceName?: string | null,
+  language?: PracticeLanguage
+) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
   try {
     const synth = window.speechSynthesis;
     synth.cancel();
+    const lang = resolveLang(text, language);
     const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang === "hi" ? "hi-IN" : "en-US";
     u.rate = rate;
     u.pitch = 1;
-    if (voiceName) {
-      const match = synth.getVoices().find((v) => v.name === voiceName);
-      if (match) u.voice = match;
-    }
+    const match = pickBestVoice(synth.getVoices(), lang, voiceName);
+    if (match) u.voice = match;
     synth.speak(u);
     return true;
   } catch {
     return false;
   }
+}
+
+export function listVoices(language: PracticeLanguage): SpeechSynthesisVoice[] {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
+  try {
+    const prefix = language === "hi" ? "hi" : "en";
+    return window.speechSynthesis
+      .getVoices()
+      .filter((v) => v.lang.toLowerCase().startsWith(prefix));
+  } catch {
+    return [];
+  }
+}
+
+export function hasNativeVoice(language: PracticeLanguage): boolean {
+  return listVoices(language).length > 0;
 }
 
 export function stopSpeaking() {
@@ -36,7 +84,7 @@ export function stopSpeaking() {
   }
 }
 
-export function useModelAudio(preferredVoice?: string | null) {
+export function useModelAudio(preferredVoice?: string | null, language: PracticeLanguage = "en") {
   const [supported] = useState(() => typeof window !== "undefined" && "speechSynthesis" in window);
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [playing, setPlaying] = useState(false);
@@ -44,18 +92,24 @@ export function useModelAudio(preferredVoice?: string | null) {
 
   const cancelledRef = useRef(false);
   const voiceRef = useRef(preferredVoice);
+  const langRef = useRef<PracticeLanguage>(language);
 
   useEffect(() => {
     voiceRef.current = preferredVoice;
   }, [preferredVoice]);
 
   useEffect(() => {
+    langRef.current = language;
+  }, [language]);
+
+  useEffect(() => {
     if (!supported) return;
     const synth = window.speechSynthesis;
     const load = () => {
+      const prefix = language === "hi" ? "hi" : "en";
       const list = synth
         .getVoices()
-        .filter((v) => v.lang.toLowerCase().startsWith("en"))
+        .filter((v) => v.lang.toLowerCase().startsWith(prefix))
         .map((v) => ({ name: v.name, lang: v.lang }));
       setVoices(list);
     };
@@ -70,7 +124,7 @@ export function useModelAudio(preferredVoice?: string | null) {
         /* noop */
       }
     };
-  }, [supported]);
+  }, [supported, language]);
 
   const stop = useCallback(() => {
     cancelledRef.current = true;
@@ -80,20 +134,17 @@ export function useModelAudio(preferredVoice?: string | null) {
   }, []);
 
   const playPassage = useCallback(
-    (text: string, rate = 0.9, voiceOverride?: string | null) => {
+    (text: string, rate = 0.9, voiceOverride?: string | null, langOverride?: PracticeLanguage) => {
       if (!supported || !text.trim()) return;
       const synth = window.speechSynthesis;
       synth.cancel();
       cancelledRef.current = false;
 
+      const lang = resolveLang(text, langOverride ?? langRef.current);
       const sentences = splitSentences(text);
       const chunks = sentences.length > 0 ? sentences : [text.trim()];
       const targetVoiceName = voiceOverride ?? voiceRef.current;
-      const allVoices = synth.getVoices();
-      const chosenVoice = targetVoiceName
-        ? allVoices.find((v) => v.name === targetVoiceName)
-        : allVoices.find((v) => v.lang.startsWith("en-US") || v.lang.startsWith("en-GB")) ??
-          allVoices.find((v) => v.lang.toLowerCase().startsWith("en"));
+      const chosenVoice = pickBestVoice(synth.getVoices(), lang, targetVoiceName);
 
       setPlaying(true);
 
@@ -105,12 +156,12 @@ export function useModelAudio(preferredVoice?: string | null) {
         }
         setActiveSentence(idx);
         const u = new SpeechSynthesisUtterance(chunks[idx]);
+        u.lang = lang === "hi" ? "hi-IN" : "en-US";
         u.rate = rate;
         u.pitch = 1;
         if (chosenVoice) u.voice = chosenVoice;
         u.onend = () => {
           if (cancelledRef.current) return;
-          // Brief natural breathing pause between sentences (320ms)
           setTimeout(() => {
             if (!cancelledRef.current) speakAt(idx + 1);
           }, 320);
@@ -130,13 +181,14 @@ export function useModelAudio(preferredVoice?: string | null) {
   return {
     supported,
     voices,
+    hasNativeVoice: voices.length > 0,
     playing,
     activeSentence,
     playPassage,
     stop,
     speakWord: useCallback(
-      (word: string, rate = 0.85, voiceOverride?: string | null) =>
-        speakSingle(word, rate, voiceOverride ?? voiceRef.current),
+      (word: string, rate = 0.85, voiceOverride?: string | null, langOverride?: PracticeLanguage) =>
+        speakSingle(word, rate, voiceOverride ?? voiceRef.current, langOverride ?? langRef.current),
       []
     ),
   };

@@ -11,8 +11,10 @@ import { dayProgressLabel } from "@/lib/program";
 import { speakSingle, stopSpeaking } from "@/lib/tts";
 import { useStore } from "@/lib/store";
 import {
+  PRACTICE_LANGUAGE_META,
   SOUND_CATEGORY_LABELS,
   fmtDur,
+  langOf,
   uid,
   type PersonalWord,
   type Recording,
@@ -112,6 +114,8 @@ function WordPracticeWorkspace({
     toast,
   } = useStore();
 
+  const wordLang = langOf(word);
+  const preferredVoice = wordLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
   const recSpeed = useMemo(() => recommendedPracticeSpeed(word), [word]);
   const [speedMode, setSpeedMode] = useState<"slow" | "natural">(recSpeed.mode);
   const [phase, setPhase] = useState<"idle" | "recording" | "review">("idle");
@@ -276,7 +280,7 @@ function WordPracticeWorkspace({
         srRef.current = r;
         r.continuous = true;
         r.interimResults = true;
-        r.lang = "en-US";
+        r.lang = PRACTICE_LANGUAGE_META[wordLang].bcp47;
         r.onresult = (e: any) => {
           let interim = "";
           for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -371,12 +375,13 @@ function WordPracticeWorkspace({
       if (recId && blob && blob.size > 0) {
         const expectedScript = speedMode === "slow" ? word.word : word.exampleSentence;
         const cmp = compareWords(expectedScript, effectiveTranscript);
-        const analysis = buildAnalysis(effectiveTranscript, capturedDur, tlRef.current, cmp);
+        const analysis = buildAnalysis(effectiveTranscript, capturedDur, tlRef.current, cmp, undefined, wordLang);
         fullRec = {
           id: recId,
           createdAt: now,
           title: `Word Drill: ${word.word} (${speedMode})`,
           mode: "word-bank",
+          language: wordLang,
           scriptText: expectedScript,
           transcript: effectiveTranscript,
           durationSec: capturedDur,
@@ -474,16 +479,16 @@ function WordPracticeWorkspace({
             &ldquo;<HighlightWord sentence={word.exampleSentence} target={word.word} />&rdquo;
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Btn variant="soft" onClick={() => speakSingle(word.word, 0.7, settings.preferredVoice)}>
+            <Btn variant="soft" onClick={() => speakSingle(word.word, 0.7, preferredVoice, wordLang)}>
               ▶ Word Slow (0.7×)
             </Btn>
-            <Btn variant="soft" onClick={() => speakSingle(word.word, 1.0, settings.preferredVoice)}>
+            <Btn variant="soft" onClick={() => speakSingle(word.word, 1.0, preferredVoice, wordLang)}>
               ▶ Word Natural (1.0×)
             </Btn>
-            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 0.78, settings.preferredVoice)}>
+            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 0.78, preferredVoice, wordLang)}>
               ▶ Sentence Slow
             </Btn>
-            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 1.0, settings.preferredVoice)}>
+            <Btn variant="ghost" onClick={() => speakSingle(word.exampleSentence, 1.0, preferredVoice, wordLang)}>
               ▶ Sentence Natural
             </Btn>
           </div>

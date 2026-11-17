@@ -23,9 +23,11 @@ import {
 import { BUILTIN_EXERCISES, dayProgressLabel } from "@/lib/program";
 import {
   EMPTY_SCORES,
+  PRACTICE_LANGUAGE_META,
   fmtDur,
   uid,
   type PitchSample,
+  type PracticeLanguage,
   type Recording,
   type RecordingAnalysis,
   type SelfScores,
@@ -39,9 +41,10 @@ import AssessmentReport from "./AssessmentReport";
 type Phase = "idle" | "recording" | "review";
 
 export default function RecordView({ nav }: { nav: (v: string) => void }) {
-  const { settings, setSettings, saveRecording, addLog, toast, recordings, exercises, openAddWord } = useStore();
+  const { settings, practiceLanguage, setSettings, saveRecording, addLog, toast, recordings, exercises, openAddWord } = useStore();
 
   const task = settings.task;
+  const recLang: PracticeLanguage = task?.language ?? practiceLanguage;
   const [script, setScript] = useState(task?.script ?? "");
   const [title, setTitle] = useState(task?.title ?? "");
   const [phase, setPhase] = useState<Phase>("idle");
@@ -145,8 +148,8 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     const pSamples = [...pitchRef.current];
     setTl(samples);
     setPitches(pSamples);
-    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples);
-    const targetWpm = task?.targetWpm ?? 130;
+    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples, recLang);
+    const targetWpm = task?.targetWpm ?? (recLang === "hi" ? 115 : 130);
     const assessment = computeDetailedAssessment({
       analysis,
       self: null,
@@ -161,6 +164,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       createdAt: Date.now(),
       title: title.trim() || `Session — ${dayProgressLabel(settings.currentDay)}`,
       mode: task?.mode ?? "manual",
+      language: recLang,
       scriptText: script.trim() || null,
       transcript,
       durationSec,
@@ -262,7 +266,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
         srRef.current = r;
         r.continuous = true;
         r.interimResults = true;
-        r.lang = "en-US";
+        r.lang = PRACTICE_LANGUAGE_META[recLang].bcp47;
         r.onresult = (e: any) => {
           let interim = "";
           for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -322,13 +326,14 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       createdAt: Date.now(),
       title: title.trim() || `Manual Check — ${dayProgressLabel(settings.currentDay)}`,
       mode: task?.mode ?? "manual",
+      language: recLang,
       scriptText: script.trim() || null,
       transcript: "",
       durationSec,
-      analysis: buildAnalysis("", durationSec, [], null),
+      analysis: buildAnalysis("", durationSec, [], null, undefined, recLang),
       self: null,
       exerciseId: task?.exerciseId ?? null,
-      targetWpm: task?.targetWpm ?? 130,
+      targetWpm: task?.targetWpm ?? (recLang === "hi" ? 115 : 130),
       hasAudio: false,
       mimeType: "audio/webm",
       dayLabel: dayProgressLabel(settings.currentDay),
@@ -365,8 +370,8 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
 
   const liveAnalysis = useMemo<RecordingAnalysis | null>(() => {
     if (!rec) return null;
-    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp, pitches);
-  }, [rec, effectiveTranscript, tl, liveCmp, pitches]);
+    return buildAnalysis(effectiveTranscript, rec.durationSec, tl, liveCmp, pitches, recLang);
+  }, [rec, effectiveTranscript, tl, liveCmp, pitches, recLang]);
 
   const hasAnySelf = useMemo(
     () => Object.values(self).some((v) => (v ?? 0) > 0),
@@ -397,6 +402,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     };
     await saveRecording(full, blob);
     addLog({
+      language: recLang,
       seconds: rec.durationSec,
       mode: full.mode,
       completed: 1,
@@ -484,14 +490,32 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
               {task?.annotatedText && (
                 <div className="rounded-xl border border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,var(--panel2))] p-3.5">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <Chip tone="brand">Active Coach Cues · target ~{task.targetWpm ?? 130} WPM</Chip>
+                    <Chip tone="brand">
+                      {recLang === "hi" ? "Hindi Cues · हिन्दी" : "Active Coach Cues"} · target ~{task.targetWpm ?? (recLang === "hi" ? 115 : 130)} WPM
+                    </Chip>
                     {task.script && (
-                      <Btn variant="soft" onClick={() => speakSingle(task.script, settings.ttsRate, settings.preferredVoice)}>
-                        Hear model audio
+                      <Btn
+                        variant="soft"
+                        onClick={() =>
+                          speakSingle(
+                            task.script,
+                            settings.ttsRate,
+                            recLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice,
+                            recLang
+                          )
+                        }
+                      >
+                        {recLang === "hi" ? "Hear Hindi model" : "Hear model audio"}
                       </Btn>
                     )}
                   </div>
                   <AnnotatedScript text={task.annotatedText} showCues />
+                  {task.romanizedText && (settings.showHindiRomanized ?? true) && (
+                    <p className="mt-2 rounded-lg bg-[var(--panel)] p-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
+                      <strong className="text-[var(--ink)]">Romanized guide: </strong>
+                      {task.romanizedText}
+                    </p>
+                  )}
                   {task.coaching && (
                     <p className="mt-2 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
                       <strong className="text-[var(--ink)]">Delivery tip: </strong>
