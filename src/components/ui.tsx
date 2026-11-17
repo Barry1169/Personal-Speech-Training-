@@ -1,7 +1,10 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { PitchSample, PracticeLog, VolumeSample } from "@/lib/types";
+import { createPortal } from "react-dom";
+import type { PersonalWord, PitchSample, PracticeLanguage, PracticeLog, VolumeSample } from "@/lib/types";
+import { getInlinePronunciation } from "@/lib/pronunciation";
+import { speakSingle, useActiveSpeech } from "@/lib/tts";
 
 // ---------- Buttons ----------
 
@@ -55,24 +58,38 @@ export function Modal({ open, onClose, title, children, wide = false }: {
     if (!open) return;
     const h = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", h);
+      document.body.style.overflow = prevOverflow;
+    };
   }, [open, onClose]);
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-6" onMouseDown={onClose}>
+
+  if (!open || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-3 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={onClose}
+    >
       <div
-        className={`modal-pop max-h-[92vh] w-full overflow-y-auto rounded-t-2xl bg-[var(--panel)] shadow-2xl sm:rounded-2xl ${wide ? "sm:max-w-2xl" : "sm:max-w-lg"}`}
+        className={`modal-pop max-h-[90vh] w-full overflow-y-auto rounded-2xl border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-2xl ${wide ? "max-w-2xl" : "max-w-lg"}`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--line)] bg-[var(--panel)] px-5 py-3.5">
           <h3 className="font-display text-[15px] font-semibold tracking-tight">{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 4l8 8M12 4l-8 8" /></svg>
           </button>
         </header>
         <div className="p-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -328,6 +345,13 @@ function TimerInner({
     };
   }, [running]);
 
+  // Auto-dismiss the completion banner cleanly after 2 seconds so it never sticks on screen
+  useEffect(() => {
+    if (!finished) return;
+    const timer = setTimeout(() => setFinished(false), 2000);
+    return () => clearTimeout(timer);
+  }, [finished]);
+
   const mm = Math.floor(left / 60).toString().padStart(2, "0");
   const ss = (left % 60).toString().padStart(2, "0");
   const fullMm = Math.floor(safeSeconds / 60).toString().padStart(2, "0");
@@ -384,9 +408,14 @@ function TimerInner({
         </Btn>
 
         {finished && (
-          <span className="animate-pop inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--good)_15%,transparent)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--good)]">
-            ✓ Time&apos;s up! Nice work
-          </span>
+          <button
+            type="button"
+            onClick={() => setFinished(false)}
+            className="animate-pop inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--good)_15%,transparent)] px-2.5 py-1 text-[11.5px] font-bold text-[var(--good)]"
+            title="Dismiss"
+          >
+            ✓ Time&apos;s up!
+          </button>
         )}
 
         {!finished && elapsed > 0 && (
@@ -681,3 +710,157 @@ export function TrainingCalendar({ logs, goalMin = 15, compact = false }: { logs
     </div>
   );
 }
+
+// ---------- Compact Info Icon Toggle (for expandable feedback cards) ----------
+
+export function InfoToggleBtn({
+  open,
+  onClick,
+  label = "Toggle detailed coaching insight",
+  className = "",
+}: {
+  open: boolean;
+  onClick: (e: React.MouseEvent) => void;
+  label?: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-label={label}
+      title={open ? "Hide details" : "Show detailed coaching insight"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick(e);
+      }}
+      className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11.5px] font-bold leading-none transition-colors ${
+        open
+          ? "border-[var(--brand)] bg-[var(--brand)] text-white"
+          : "border-[var(--line-strong)] bg-[var(--panel2)] text-[var(--muted)] hover:border-[var(--brand)] hover:text-[var(--brand)]"
+      } ${className}`}
+    >
+      i
+    </button>
+  );
+}
+
+// ---------- Inline Pronunciation Breakdown (easy phonetic + IPA) ----------
+
+export function WordPronunciation({
+  word,
+  language,
+  phonetic,
+  ipa,
+  savedWords,
+  showIpa = true,
+  paren = true,
+  className = "",
+}: {
+  word: string;
+  language?: PracticeLanguage;
+  phonetic?: string;
+  ipa?: string;
+  savedWords?: PersonalWord[];
+  showIpa?: boolean;
+  paren?: boolean;
+  className?: string;
+}) {
+  const info = useMemo(() => {
+    if (phonetic) {
+      return {
+        phonetic: phonetic.replace(/-/g, "·"),
+        ipa: ipa ?? "",
+      };
+    }
+    return getInlinePronunciation(word, language, savedWords);
+  }, [word, language, phonetic, ipa, savedWords]);
+
+  if (!info.phonetic) return null;
+
+  return (
+    <span className={`inline-flex flex-wrap items-baseline gap-1 ${className}`}>
+      <span className="phonetic-inline">
+        {paren ? `(${info.phonetic}` : info.phonetic}
+        {showIpa && info.ipa ? (
+          <span className="ipa-inline"> · {info.ipa}</span>
+        ) : null}
+        {paren ? ")" : ""}
+      </span>
+    </span>
+  );
+}
+
+// ---------- Standardized Per-Word Drill Controls: [0.7x] [1.0x] [Record Word] ----------
+
+export function WordDrillControls({
+  word,
+  language = "en",
+  onRecordWord,
+  recordLabel = "Record Word",
+  className = "",
+}: {
+  word: string;
+  language?: PracticeLanguage;
+  onRecordWord?: (word: string) => void;
+  recordLabel?: string;
+  className?: string;
+}) {
+  const active = useActiveSpeech();
+  const cleanWord = word.trim();
+  const isThisWord = active?.text.trim().toLowerCase() === cleanWord.toLowerCase();
+  const playingSlow = Boolean(isThisWord && active && Math.abs(active.rate - 0.7) < 0.05);
+  const playingNormal = Boolean(isThisWord && active && Math.abs(active.rate - 1.0) < 0.05);
+
+  const handleSpeak = (e: React.MouseEvent, rate: 0.7 | 1.0) => {
+    e.stopPropagation();
+    if (!cleanWord) return;
+    speakSingle(cleanWord, rate, undefined, language);
+  };
+
+  return (
+    <span className={`inline-flex flex-wrap items-center gap-1.5 ${className}`}>
+      <button
+        type="button"
+        onClick={(e) => handleSpeak(e, 0.7)}
+        aria-pressed={playingSlow}
+        title={`Play "${cleanWord}" slowly at 0.7x speed`}
+        className={`word-ctrl-btn ${playingSlow ? "word-ctrl-btn-active" : ""}`}
+      >
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          {playingSlow ? <rect x="2.5" y="2.5" width="7" height="7" rx="1" /> : <path d="M3 2l7 4-7 4V2z" />}
+        </svg>
+        0.7x
+      </button>
+      <button
+        type="button"
+        onClick={(e) => handleSpeak(e, 1.0)}
+        aria-pressed={playingNormal}
+        title={`Play "${cleanWord}" at normal 1.0x speed`}
+        className={`word-ctrl-btn ${playingNormal ? "word-ctrl-btn-active" : ""}`}
+      >
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          {playingNormal ? <rect x="2.5" y="2.5" width="7" height="7" rx="1" /> : <path d="M3 2l7 4-7 4V2z" />}
+        </svg>
+        1.0x
+      </button>
+      {onRecordWord && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRecordWord(cleanWord);
+          }}
+          title={`Record and check your pronunciation of "${cleanWord}"`}
+          className="word-ctrl-btn word-ctrl-btn-rec"
+        >
+          <svg width="10" height="10" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <circle cx="6" cy="6" r="4" />
+          </svg>
+          {recordLabel}
+        </button>
+      )}
+    </span>
+  );
+}
+

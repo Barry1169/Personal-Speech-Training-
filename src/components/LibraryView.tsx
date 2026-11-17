@@ -5,8 +5,44 @@ import { useStore } from "@/lib/store";
 import { BUILTIN_EXERCISES } from "@/lib/program";
 import { hasDevanagari } from "@/lib/analytics";
 import { CATEGORIES, type Difficulty, type Exercise, fmtDur } from "@/lib/types";
-import { speakSingle } from "@/lib/tts";
-import { Btn, Card, Chip, Field, Input, Modal, Select, Textarea, Timer } from "./ui";
+import { speakSingle, stopSpeaking } from "@/lib/tts";
+import {
+  Btn,
+  Card,
+  Chip,
+  Field,
+  Input,
+  Modal,
+  Select,
+  Textarea,
+  Timer,
+  WordDrillControls,
+  WordPronunciation,
+} from "./ui";
+
+/** Extract discrete drill words from a Library line when it is a single word or minimal-pair drill (e.g. "ship / sheep · bit / beat"). */
+function extractLibraryLineWords(line: string): string[] {
+  const cleaned = line.replace(/\*\*/g, "").trim();
+  // Match minimal pairs separated by /, –, —, ·, or comma when tokens are single words
+  if (/[\/·—–]/.test(cleaned)) {
+    const parts = cleaned
+      .split(/[\/·—–,]+/g)
+      .map((p) => p.replace(/^[^\p{L}\p{M}]+|[^\p{L}\p{M}]+$/gu, "").trim())
+      .filter(Boolean);
+    if (
+      parts.length >= 2 &&
+      parts.every((p) => !p.includes(" ") && p.length >= 2 && p.length <= 22 && !/^[A-Z]{2,3}$/.test(p))
+    ) {
+      return Array.from(new Set(parts));
+    }
+  }
+  // Single word line (skip pure uppercase vocal sound cues like "AH" / "MM")
+  if (!cleaned.includes(" ") && cleaned.length >= 2 && cleaned.length <= 24 && !/^[A-Z]{2,3}$/.test(cleaned)) {
+    const w = cleaned.replace(/^[^\p{L}\p{M}]+|[^\p{L}\p{M}]+$/gu, "").trim();
+    return w ? [w] : [];
+  }
+  return [];
+}
 
 const emptyForm = {
   name: "", category: CATEGORIES[0] as string, difficulty: "beginner" as Difficulty,
@@ -19,11 +55,13 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
     settings,
     setSettings,
     exercises,
+    words,
     addExercise,
     updateExercise,
     deleteExercise,
     toggleFavorite,
     openAddWord,
+    openQuickWord,
     toast,
   } = useStore();
   const [q, setQ] = useState("");
@@ -127,76 +165,145 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
         )}
       </Card>
 
-      {/* Detail modal */}
-      <Modal open={!!detail} onClose={() => setDetail(null)} title={detail?.name ?? ""}>
+      {/* Detail preview modal — rendered via viewport portal so it always appears centered on screen */}
+      <Modal
+        open={!!detail}
+        onClose={() => {
+          stopSpeaking();
+          setDetail(null);
+        }}
+        title={detail?.name ?? ""}
+        wide
+      >
         {detail && (
           <div className="grid gap-4">
-            <div className="flex flex-wrap gap-2">
-              <Chip tone={detail.difficulty === "beginner" ? "good" : detail.difficulty === "intermediate" ? "warn" : "bad"}>{detail.difficulty}</Chip>
-              <Chip>{detail.category}</Chip>
-              <Chip>⏱ {fmtDur(detail.durationSec)} × {detail.reps} reps</Chip>
-              {detail.restSec > 0 && <Chip>rest {detail.restSec}s</Chip>}
-            </div>
-            <p className="text-[13.5px] leading-relaxed text-[var(--muted)]">{detail.instructions}</p>
-            {detail.material.length > 0 && (
-              <div>
-                <p className="section-label">Material</p>
-                <div className="mt-1.5 grid gap-1.5">
-                  {detail.material.map((m, i) => (
-                    <div key={i} className="flex items-start justify-between gap-2 rounded-lg bg-[var(--panel2)] px-3 py-2 text-[13.5px] leading-relaxed">
-                      <span>{m}</span>
-                      <button
-                        type="button"
-                        className="icon-btn shrink-0"
-                        title="Hear model audio"
-                        onClick={() => {
-                          const isHi = detail.language === "hi" || hasDevanagari(m);
-                          speakSingle(
-                            m,
-                            settings.ttsRate,
-                            isHi ? settings.preferredVoiceHi : settings.preferredVoice,
-                            isHi ? "hi" : "en"
-                          );
-                        }}
-                      >
-                        <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                <Chip tone={detail.difficulty === "beginner" ? "good" : detail.difficulty === "intermediate" ? "warn" : "bad"}>
+                  {detail.difficulty}
+                </Chip>
+                <Chip>{detail.category}</Chip>
+                <Chip>⏱ {fmtDur(detail.durationSec)} × {detail.reps} reps</Chip>
+                {detail.restSec > 0 && <Chip>rest {detail.restSec}s</Chip>}
               </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Timer resetKey={detail.id} seconds={detail.durationSec} />
-              <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
-                + Add My Word
-              </Btn>
               {nav && (
                 <Btn
                   variant="primary"
                   onClick={() => {
-                    const combined = detail.material.join("\n");
+                    stopSpeaking();
+                    const combined =
+                      detail.material.length > 0
+                        ? detail.material.map((m) => m.replace(/\*\*(.+?)\*\*/g, "$1")).join("\n")
+                        : detail.instructions;
                     const isHi = detail.language === "hi" || hasDevanagari(combined);
                     setSettings({
                       task: {
                         title: detail.name,
                         mode: detail.category,
                         language: isHi ? "hi" : "en",
+                        exerciseId: detail.id,
                         script: combined,
+                        loadedAt: Date.now(),
                       },
                     });
-                    toast(`Loaded "${detail.name}" in Recorder`, "info");
+                    toast(`Loaded "${detail.name}" in Record & Assess`, "info");
                     setDetail(null);
                     nav("record");
                   }}
                 >
-                  Practice in Recorder
+                  Record My Voice →
                 </Btn>
               )}
+            </div>
+
+            {detail.material.length > 0 && (
+              <div>
+                <p className="section-label">Practice Material</p>
+                <div className="mt-1.5 grid gap-2">
+                  {detail.material.map((m, i) => {
+                    const isHi = detail.language === "hi" || hasDevanagari(m);
+                    const lineLang = isHi ? "hi" : "en";
+                    const drillWords = extractLibraryLineWords(m);
+
+                    if (drillWords.length > 0) {
+                      return (
+                        <div key={i} className="grid gap-1.5 sm:grid-cols-2">
+                          {drillWords.map((dw) => (
+                            <div
+                              key={dw}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-3 py-2"
+                            >
+                              <div className="flex flex-wrap items-baseline gap-1.5">
+                                <span className="font-display text-[14px] font-bold text-[var(--ink)]">{dw}</span>
+                                <WordPronunciation word={dw} language={lineLang} savedWords={words} />
+                              </div>
+                              <WordDrillControls
+                                word={dw}
+                                language={lineLang}
+                                onRecordWord={(wd) => openQuickWord(wd)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+
+                    const cleanLine = m.replace(/\*\*(.+?)\*\*/g, "$1");
+                    return (
+                      <div
+                        key={i}
+                        className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-3 py-2.5 text-[13.5px] leading-relaxed"
+                      >
+                        <span className="min-w-0 flex-1 text-[var(--ink)]">{cleanLine}</span>
+                        <span className="inline-flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            className="word-ctrl-btn"
+                            title="Hear slowly at 0.7x"
+                            onClick={() => speakSingle(cleanLine, 0.7, undefined, lineLang)}
+                          >
+                            ▶ 0.7x
+                          </button>
+                          <button
+                            type="button"
+                            className="word-ctrl-btn"
+                            title="Hear at normal 1.0x"
+                            onClick={() => speakSingle(cleanLine, 1.0, undefined, lineLang)}
+                          >
+                            ▶ 1.0x
+                          </button>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3.5 py-2.5">
+              <p className="section-label">Coach Instructions</p>
+              <p className="mt-1 text-[13px] leading-relaxed text-[var(--muted)]">{detail.instructions}</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 border-t border-[var(--line)] pt-3">
+              <Timer resetKey={detail.id} seconds={detail.durationSec} />
+              <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
+                + Add My Word
+              </Btn>
               <Btn variant="soft" onClick={() => toggleFavorite(detail.id)} className="ml-auto">
                 {settings.favorites.includes(detail.id) ? "★ Favorited" : "☆ Favorite"}
               </Btn>
-              {!detail.builtin && <Btn variant="ghost" onClick={() => { setEditing(detail); setDetail(null); }}>Edit</Btn>}
+              {!detail.builtin && (
+                <Btn
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(detail);
+                    setDetail(null);
+                  }}
+                >
+                  Edit
+                </Btn>
+              )}
             </div>
           </div>
         )}

@@ -39,8 +39,12 @@ import { analyzePcmProfile, compareShadowTake } from "../shadowing";
 import { BUILTIN_EXERCISES, MODES, PROGRAM, SCENARIOS, dayLabel } from "../program";
 import { streaksFromDates, weeklyReport } from "../coach";
 import {
+  FIVE_REP_PASS_THRESHOLD,
+  FIVE_REP_TARGET,
   analyzeWordEntry,
+  applyFiveRepResult,
   applyWordAttempt,
+  assessSingleWordPronunciation,
   buildCustomWordCoachedExercise,
   compareWordBeforeAfter,
   createPersonalWord,
@@ -48,8 +52,15 @@ import {
   evaluateWordAttempt,
   generateCustomWordDrillContent,
   getDueWords,
+  getInlinePronunciation,
   recommendedPracticeSpeed,
 } from "../pronunciation";
+import {
+  isStructuredSpeakingExercise,
+  isStructuredTask,
+  parseStructuredFramework,
+} from "../structuredSpeaking";
+import { clampSpeechRate } from "../tts";
 import {
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
@@ -851,5 +862,192 @@ test("Speaker Shadowing Studio DSP: speaker-normalized pitch melody, pace, pause
   );
   assert.ok(rushedCmp.improvements.length >= 2, "Expected actionable coaching improvements on rough take");
 });
+
+test("inline pronunciation breakdown provides clear phonetic + IPA and honors custom guidance", () => {
+  const always = getInlinePronunciation("always", "en");
+  assert.equal(always.phonetic, "awl·wayz");
+  assert.equal(always.ipa, "/ˈɔːl.weɪz/");
+
+  const tricky = getInlinePronunciation("tricky", "en");
+  assert.equal(tricky.phonetic, "trik·ee");
+  assert.equal(tricky.ipa, "/ˈtrɪk.i/");
+
+  const calmly = getInlinePronunciation("calmly", "en");
+  assert.equal(calmly.phonetic, "kaam·lee");
+  assert.equal(calmly.ipa, "/ˈkɑːm.li/");
+
+  // Custom user guidance in Word Bank overrides default phonetic cleanly
+  const customWord = createPersonalWord("intermediate", {
+    problemType: "stammering",
+    difficultPart: "ter-MEE",
+    customPronunciation: "in·tur·MEE·dee·ut",
+    notes: "Breathe gently before first syllable",
+    userRecordingBlobKey: "wordrec-test123",
+    userRecordingMimeType: "audio/webm",
+  });
+  assert.equal(customWord.problemType, "stammering");
+  assert.equal(customWord.difficultPart, "ter-MEE");
+  assert.equal(customWord.customPronunciation, "in·tur·MEE·dee·ut");
+  assert.equal(customWord.userRecordingBlobKey, "wordrec-test123");
+  assert.ok(customWord.mouthGuide.mouthAirflow.includes("ter-MEE"));
+
+  const resolvedInline = getInlinePronunciation("Intermediate", "en", [customWord]);
+  assert.equal(resolvedInline.phonetic, "in·tur·MEE·dee·ut");
+  assert.equal(resolvedInline.isCustom, true);
+  assert.equal(resolvedInline.difficultPart, "ter-MEE");
+});
+
+test("quick single-word pronunciation check detects exact matches, mispronunciations, and Hindi words", () => {
+  const wrong = assessSingleWordPronunciation({
+    targetWord: "intermediate",
+    transcript: "intermeda",
+    language: "en",
+  });
+  assert.equal(wrong.correct, false);
+  assert.equal(wrong.noSpeech, false);
+  assert.equal(wrong.targetWord, "intermediate");
+  assert.equal(wrong.detectedWord, "intermeda");
+  assert.ok(wrong.similarityPct > 55 && wrong.similarityPct < 95);
+  assert.equal(wrong.phonetic, "in·ter·MEE·dee·ut");
+  assert.ok(wrong.ipa.length > 3);
+
+  const right = assessSingleWordPronunciation({
+    targetWord: "intermediate",
+    transcript: "intermediate",
+    language: "en",
+  });
+  assert.equal(right.correct, true);
+  assert.equal(right.similarityPct, 100);
+
+  const hiRight = assessSingleWordPronunciation({
+    targetWord: "स्पष्ट",
+    transcript: "स्पष्ट",
+    language: "hi",
+  });
+  assert.equal(hiRight.correct, true);
+  assert.equal(hiRight.similarityPct, 100);
+
+  const silent = assessSingleWordPronunciation({
+    targetWord: "calmly",
+    transcript: "   ",
+    language: "en",
+  });
+  assert.equal(silent.correct, false);
+  assert.equal(silent.noSpeech, true);
+});
+
+test("5-repetition word practice clears word at >=4/5 correct while preserving all historical attempts", () => {
+  assert.equal(FIVE_REP_TARGET, 5);
+  assert.equal(FIVE_REP_PASS_THRESHOLD, 4);
+
+  const now = Date.now();
+  let word = createPersonalWord("thorough", { status: "difficult" });
+  // Log one prior historical attempt first
+  const prior = evaluateWordAttempt({
+    word,
+    transcript: "thoro",
+    speedMode: "slow",
+    selfScore: 2,
+    nowMs: now - 86400000,
+  });
+  word = applyWordAttempt(word, prior);
+  assert.equal(word.attempts.length, 1);
+
+  // Case 1: 3/5 correct -> NOT cleared, stays in active practice, all attempts kept
+  const threeOfFive = applyFiveRepResult(
+    word,
+    [
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+      { transcript: "thoro", correct: false, similarityPct: 75 },
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+      { transcript: "trough", correct: false, similarityPct: 62 },
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+    ],
+    now
+  );
+  assert.equal(threeOfFive.passed, false);
+  assert.equal(threeOfFive.correctCount, 3);
+  assert.ok(!threeOfFive.updated.clearedFromActive);
+  assert.equal(threeOfFive.updated.attempts.length, 6); // 1 prior + 5 new
+
+  // Case 2: 4/5 correct -> AUTOMATICALLY cleared from active problem list, ALL 11 historical attempts kept!
+  const fourOfFive = applyFiveRepResult(
+    threeOfFive.updated,
+    [
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+      { transcript: "thoro", correct: false, similarityPct: 75 },
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+      { transcript: "thorough", correct: true, similarityPct: 100 },
+    ],
+    now + 5000
+  );
+  assert.equal(fourOfFive.passed, true);
+  assert.equal(fourOfFive.correctCount, 4);
+  assert.equal(fourOfFive.updated.clearedFromActive, true);
+  assert.equal(fourOfFive.updated.status, "mastered");
+  assert.equal(fourOfFive.updated.attempts.length, 11); // 100% history preserved!
+  assert.ok(fourOfFive.updated.masteryScore >= 80);
+
+  // Verify cleared word is excluded from active due list and custom active drills
+  const due = getDueWords([fourOfFive.updated], now + 86400000 * 60);
+  assert.equal(due.length, 0);
+  const customDrill = generateCustomWordDrillContent([fourOfFive.updated], 0, "en");
+  assert.equal(customDrill.targetWords.length, 0);
+  assert.equal(buildCustomWordCoachedExercise([fourOfFive.updated], 0, "en"), null);
+});
+
+test("structured speaking detector activates ONLY for PREP & timed frameworks, never ordinary passages", () => {
+  const prep = getCoachedExerciseById("cm-imp-beg-1");
+  assert.ok(prep);
+  assert.equal(isStructuredSpeakingExercise(prep), true);
+  assert.equal(
+    isStructuredTask({ mode: "impromptu", structureSteps: prep.structureSteps }),
+    true
+  );
+
+  const parsedPrep = parseStructuredFramework({
+    id: prep.id,
+    title: prep.title,
+    language: "en",
+    whatToDo: prep.whatToDo,
+    structureSteps: prep.structureSteps!,
+  });
+  assert.equal(parsedPrep.isPrep, true);
+  assert.equal(parsedPrep.stages.length, 4);
+  assert.deepEqual(
+    parsedPrep.stages.map((s) => s.letter),
+    ["P", "R", "E", "P"]
+  );
+  assert.equal(parsedPrep.totalDurationSec, 60);
+  assert.ok(parsedPrep.stages.every((s) => s.starterPhrase && s.starterPhrase.length > 5));
+
+  // Ordinary reading sentences, paragraphs, long passages, conversations, tongue twisters, and scripted stories must return false
+  for (const ex of ALL_COACHED_MATERIALS) {
+    if (
+      ex.materialType === "short_sentence" ||
+      ex.materialType === "paragraph" ||
+      ex.materialType === "long_passage" ||
+      ex.materialType === "tongue_twister" ||
+      ex.materialType === "conversation" ||
+      ex.id === "cm-story-int-1"
+    ) {
+      assert.equal(
+        isStructuredSpeakingExercise(ex),
+        false,
+        `Ordinary exercise "${ex.id}" must NOT show structured speaking framework UI`
+      );
+    }
+  }
+});
+
+test("speech rate clamping preserves distinct slow 0.7x and normal 1.0x playback rates", () => {
+  assert.equal(clampSpeechRate(0.7), 0.7);
+  assert.equal(clampSpeechRate(1.0), 1.0);
+  assert.notEqual(clampSpeechRate(0.7), clampSpeechRate(1.0));
+  assert.equal(clampSpeechRate(0.1), 0.55);
+  assert.equal(clampSpeechRate(3.0), 1.5);
+});
+
 
 

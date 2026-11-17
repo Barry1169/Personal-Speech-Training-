@@ -20,11 +20,11 @@ import {
 } from "./ui";
 
 const SKILL_COLORS: Record<string, string> = {
-  clarity: "#1f7a68",
-  pronunciation: "#c2711d",
-  fluency: "#7a5cc4",
-  pacing: "#3a6ea5",
-  vocalControl: "#b3452f",
+  clarity: "var(--good)",
+  pronunciation: "var(--warn)",
+  fluency: "var(--brand)",
+  pacing: "var(--accent)",
+  vocalControl: "var(--bad)",
 };
 
 function downloadText(name: string, text: string, mime = "text/plain") {
@@ -51,6 +51,10 @@ export default function ProgressView() {
     dueWords,
     weakSounds,
     overallBeforeAfter,
+    resolvedProblemWords,
+    isProblemWordResolved,
+    addWordsBatch,
+    openFiveRepPractice,
     setPracticeWordId,
     openAddWord,
     logs,
@@ -325,7 +329,7 @@ export default function ProgressView() {
             </p>
           ) : (
             <LineChart
-              series={[{ name: "Overall / 100", color: "#1f7a68", points: overallSeries.points }]}
+              series={[{ name: "Overall / 100", color: "var(--brand)", points: overallSeries.points }]}
               labels={overallSeries.labels}
               yMax={100}
             />
@@ -397,16 +401,61 @@ export default function ProgressView() {
                 )}
               </div>
 
-              {commonMistakes.topMissedWords.length > 0 && (
-                <div className="rounded-lg bg-[var(--panel2)] p-3">
-                  <SectionLabel>Frequently missed / rough script words</SectionLabel>
-                  <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {commonMistakes.topMissedWords.map((w) => (
-                      <Chip key={w.word} tone="bad">{w.word} ×{w.count}</Chip>
-                    ))}
+              {commonMistakes.topMissedWords.length > 0 && (() => {
+                const activeMissed = commonMistakes.topMissedWords.filter(
+                  (w) => !isProblemWordResolved(w.word, practiceLanguage)
+                );
+                const clearedMissedCount =
+                  commonMistakes.topMissedWords.length - activeMissed.length;
+                return (
+                  <div className="rounded-lg bg-[var(--panel2)] p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <SectionLabel>Frequently missed / rough script words</SectionLabel>
+                      {activeMissed.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            addWordsBatch(
+                              activeMissed.map((m) => m.word),
+                              { language: practiceLanguage, source: "assessment", status: "difficult" }
+                            )
+                          }
+                          className="chip chip-brand cursor-pointer hover:brightness-95"
+                        >
+                          + Add All ({activeMissed.length})
+                        </button>
+                      )}
+                    </div>
+                    {activeMissed.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
+                        {activeMissed.map((w) => (
+                          <button
+                            key={w.word}
+                            type="button"
+                            onClick={() =>
+                              openFiveRepPractice({ word: w.word, language: practiceLanguage })
+                            }
+                            title={`Practice "${w.word}" 5 times (4/5 correct clears it from active problem words)`}
+                            className="chip chip-bad cursor-pointer hover:brightness-95"
+                          >
+                            {w.word} ×{w.count} · Practice
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-[12px] text-[var(--good)]">
+                        ✓ All recurring problem words cleared through 5-rep practice!
+                      </p>
+                    )}
+                    {(clearedMissedCount > 0 || resolvedProblemWords.length > 0) && (
+                      <p className="mt-1.5 text-[11px] text-[var(--muted)]">
+                        History preserved · {resolvedProblemWords.length} word
+                        {resolvedProblemWords.length === 1 ? "" : "s"} cleared (4/5+ reps).
+                      </p>
+                    )}
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {commonMistakes.topRepeats.length > 0 && (
                 <div className="rounded-lg bg-[var(--panel2)] p-3">

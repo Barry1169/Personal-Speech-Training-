@@ -11,6 +11,7 @@ import {
   type PracticeLanguage,
   type PracticeLog,
   type Recording,
+  type ResolvedProblemWord,
   type SessionDebrief,
   type Settings,
   type ShadowAttempt,
@@ -20,8 +21,6 @@ import {
   type WeakComboFinding,
   type WeakSoundFinding,
   type WordAttempt,
-  type WordMouthGuide,
-  type WordStatus,
   DEFAULT_COACH_PLAN,
   DEFAULT_PROFILE,
   DEFAULT_SETTINGS,
@@ -42,6 +41,8 @@ import {
   type SkillStanding,
 } from "./adaptiveCoach";
 import {
+  FIVE_REP_PASS_THRESHOLD,
+  applyFiveRepResult,
   applyWordAttempt,
   buildCustomWordCoachedExercise,
   compareOverallBeforeAfter,
@@ -49,6 +50,7 @@ import {
   detectWeakSounds,
   getDueWords,
   normalizeWord,
+  type CreatePersonalWordOptions,
 } from "./pronunciation";
 
 interface ExportPayload {
@@ -71,6 +73,25 @@ export interface AddWordModalState {
   source: PersonalWord["source"];
   editingWord: PersonalWord | null;
 }
+
+export interface FiveRepTarget {
+  word: string;
+  language?: PracticeLanguage;
+  context?: string;
+  correctionTip?: string;
+}
+
+export interface QuickWordModalState {
+  open: boolean;
+  initialWord: string;
+  autoRecord: boolean;
+  sessionKey: number;
+}
+
+export type AddWordStoreOptions = CreatePersonalWordOptions & {
+  userRecordingBlob?: Blob | null;
+  silent?: boolean;
+};
 
 export interface LangProgressSummary {
   language: PracticeLanguage;
@@ -165,6 +186,21 @@ interface Store {
   closeAddWord: () => void;
   practiceWordId: string | null;
   setPracticeWordId: (id: string | null) => void;
+  fiveRepTarget: FiveRepTarget | null;
+  openFiveRepPractice: (target: FiveRepTarget) => void;
+  closeFiveRepPractice: () => void;
+  completeFiveRepSession: (params: {
+    word: string;
+    language?: PracticeLanguage;
+    reps: { transcript: string; correct: boolean; similarityPct: number; ts: number }[];
+    durationSec: number;
+  }) => Promise<{ passed: boolean; correctCount: number; resolvedWord: boolean }>;
+  isProblemWordResolved: (rawWord: string, lang?: PracticeLanguage) => boolean;
+  resolvedProblemWords: ResolvedProblemWord[];
+  quickWordModal: QuickWordModalState;
+  openQuickWord: (initialWord?: string, autoRecord?: boolean) => void;
+  closeQuickWord: () => void;
+  completeQuickWordCheck: (word: string, lang?: PracticeLanguage, durationSec?: number) => void;
   setSettings: (patch: Partial<Settings>) => void;
   updateProfile: (patch: Partial<UserProfile>) => void;
   updateCoachPlan: (plan: CoachPlan, lang?: PracticeLanguage) => void;
@@ -175,20 +211,16 @@ interface Store {
   deleteExercise: (id: string) => void;
   addWord: (
     rawWord: string,
-    opts?: {
-      language?: PracticeLanguage;
-      status?: WordStatus;
-      source?: PersonalWord["source"];
-      phonetic?: string;
-      ipa?: string;
-      meaning?: string;
-      exampleSentence?: string;
-      notes?: string;
-      mouthGuide?: Partial<WordMouthGuide>;
-    }
+    opts?: AddWordStoreOptions
   ) => { word: PersonalWord; existed: boolean };
-  updateWord: (word: PersonalWord) => void;
+  addWordsBatch: (
+    rawWords: string[],
+    opts?: Omit<AddWordStoreOptions, "userRecordingBlob">
+  ) => { added: PersonalWord[]; skipped: PersonalWord[] };
+  updateWord: (word: PersonalWord, userRecordingBlob?: Blob | null) => void;
   deleteWord: (id: string) => void;
+  saveBlob: (key: string, blob: Blob) => Promise<void>;
+  deleteBlob: (key: string) => Promise<void>;
   recordWordAttempt: (
     wordId: string,
     attempt: WordAttempt,
@@ -204,7 +236,8 @@ interface Store {
   exportJSON: (includeAudio: boolean) => Promise<{ ok: boolean; skippedAudio: boolean }>;
   importJSON: (file: File) => Promise<{ ok: boolean; msg: string }>;
   clearAllData: () => Promise<void>;
-  toast: (msg: string, kind?: Toast["kind"]) => void;
+  toast: (msg: string, kind?: Toast["kind"], durationMs?: number) => void;
+  dismissToast: (id: number) => void;
   stats: StatsPack;
   badges: Badge[];
   skillAverages: Record<string, number | null>;
@@ -250,6 +283,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     editingWord: null,
   });
   const [practiceWordId, setPracticeWordId] = useState<string | null>(null);
+  const [fiveRepTarget, setFiveRepTarget] = useState<FiveRepTarget | null>(null);
+  const [quickWordModal, setQuickWordModal] = useState<QuickWordModalState>({
+    open: false,
+    initialWord: "",
+    autoRecord: false,
+    sessionKey: 0,
+  });
 
   const settingsRef = useRef(settings);
   useEffect(() => {
@@ -272,10 +312,35 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     shadowRef.current = shadowItems;
   }, [shadowItems]);
 
-  const toast = useCallback((msg: string, kind: Toast["kind"] = "ok") => {
+  const dismissToast = useCallback((id: number) => {
+    setToasts((t) => t.filter((x) => x.id !== id));
+  }, []);
+
+  const toast = useCallback((msg: string, kind: Toast["kind"] = "ok", durationMs = 3600) => {
     const id = toastId++;
-    setToasts((t) => [...t, { id, msg, kind }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200);
+    setToasts((t) => [...t.slice(-3), { id, msg, kind }]);
+    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), Math.max(1200, durationMs));
+  }, []);
+
+  const openFiveRepPractice = useCallback((target: FiveRepTarget) => {
+    setFiveRepTarget(target);
+  }, []);
+
+  const closeFiveRepPractice = useCallback(() => {
+    setFiveRepTarget(null);
+  }, []);
+
+  const openQuickWord = useCallback((initialWord = "", autoRecord = false) => {
+    setQuickWordModal((prev) => ({
+      open: true,
+      initialWord,
+      autoRecord,
+      sessionKey: prev.sessionKey + 1,
+    }));
+  }, []);
+
+  const closeQuickWord = useCallback(() => {
+    setQuickWordModal((prev) => ({ ...prev, open: false, autoRecord: false }));
   }, []);
 
   const openAddWord = useCallback((initialWord = "", source: PersonalWord["source"] = "manual") => {
@@ -357,8 +422,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [settings.theme]);
 
   const setSettings = useCallback((patch: Partial<Settings>) => {
+    const normalizedPatch: Partial<Settings> =
+      patch.task && !patch.task.loadedAt
+        ? { ...patch, task: { ...patch.task, loadedAt: Date.now() } }
+        : patch;
     setSettingsState((prev) => {
-      const next = { ...prev, ...patch };
+      const next = { ...prev, ...normalizedPatch };
       void idbPut("kv", { ...next, key: "settings" });
       return next;
     });
@@ -506,47 +575,196 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   // ---- Personal Pronunciation Word Bank CRUD & Spaced-Repetition ----
 
+  const saveBlob = useCallback(async (key: string, blob: Blob) => {
+    await idbPut("blobs", blob, key);
+  }, []);
+
+  const deleteBlob = useCallback(async (key: string) => {
+    await idbDelete("blobs", key).catch(() => undefined);
+  }, []);
+
+  const unresolveProblemWord = useCallback((norm: string, lang: PracticeLanguage) => {
+    setSettingsState((prev) => {
+      const list = prev.resolvedProblemWords ?? [];
+      if (!list.some((r) => r.normalized === norm && r.language === lang)) return prev;
+      const next: Settings = {
+        ...prev,
+        resolvedProblemWords: list.filter((r) => !(r.normalized === norm && r.language === lang)),
+      };
+      void idbPut("kv", { ...next, key: "settings" });
+      return next;
+    });
+  }, []);
+
   const addWord = useCallback(
-    (
-      rawWord: string,
-      opts?: {
-        language?: PracticeLanguage;
-        status?: WordStatus;
-        source?: PersonalWord["source"];
-        phonetic?: string;
-        ipa?: string;
-        meaning?: string;
-        exampleSentence?: string;
-        notes?: string;
-        mouthGuide?: Partial<WordMouthGuide>;
-      }
-    ) => {
+    (rawWord: string, opts?: AddWordStoreOptions) => {
       const targetLang = opts?.language ?? practiceLangRef.current;
       const norm = normalizeWord(rawWord);
       const existing = allWordsRef.current.find((w) => w.normalized === norm && langOf(w) === targetLang);
       if (existing) {
-        toast(`"${existing.word}" is already in your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`, "info");
+        // Reactivate if it had been cleared from active practice or enrich with new detectedPronunciation/recording
+        const needsUpdate =
+          Boolean(existing.clearedFromActive) ||
+          Boolean(opts?.detectedPronunciation && opts.detectedPronunciation !== existing.detectedPronunciation) ||
+          Boolean(opts?.userRecordingBlob && opts?.userRecordingBlobKey);
+
+        if (needsUpdate) {
+          const refreshed: PersonalWord = {
+            ...existing,
+            status: existing.clearedFromActive ? opts?.status ?? "difficult" : existing.status,
+            clearedFromActive: false,
+            detectedPronunciation: opts?.detectedPronunciation?.trim() || existing.detectedPronunciation,
+            userRecordingBlobKey: opts?.userRecordingBlobKey || existing.userRecordingBlobKey,
+            userRecordingMimeType: opts?.userRecordingMimeType || existing.userRecordingMimeType,
+            userRecordingTranscript: opts?.userRecordingTranscript?.trim() || existing.userRecordingTranscript,
+            nextReviewAt: existing.clearedFromActive ? Date.now() : existing.nextReviewAt,
+            updatedAt: Date.now(),
+          };
+          allWordsRef.current = allWordsRef.current.map((w) => (w.id === refreshed.id ? refreshed : w));
+          setAllWords((prev) => prev.map((w) => (w.id === refreshed.id ? refreshed : w)));
+          void idbPut("words", refreshed);
+          if (opts?.userRecordingBlob && opts?.userRecordingBlobKey) {
+            void idbPut("blobs", opts.userRecordingBlob, opts.userRecordingBlobKey);
+          }
+          unresolveProblemWord(norm, targetLang);
+          if (!opts?.silent) {
+            toast(
+              existing.clearedFromActive
+                ? `Re-activated "${refreshed.word}" in your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`
+                : `Updated "${refreshed.word}" in your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`,
+              "info"
+            );
+          }
+          return { word: refreshed, existed: true };
+        }
+
+        if (!opts?.silent) {
+          toast(`"${existing.word}" is already in your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`, "info");
+        }
         return { word: existing, existed: true };
       }
-      const created = createPersonalWord(rawWord, { ...opts, language: targetLang });
+
+      const { userRecordingBlob, silent, ...createOpts } = opts ?? {};
+      const blobKey =
+        userRecordingBlob && !createOpts.userRecordingBlobKey
+          ? `wordrec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+          : createOpts.userRecordingBlobKey;
+      const blobMime =
+        userRecordingBlob && !createOpts.userRecordingMimeType
+          ? userRecordingBlob.type || "audio/webm"
+          : createOpts.userRecordingMimeType;
+
+      const created = createPersonalWord(rawWord, {
+        ...createOpts,
+        language: targetLang,
+        userRecordingBlobKey: blobKey,
+        userRecordingMimeType: blobMime,
+      });
+      allWordsRef.current = [created, ...allWordsRef.current];
       setAllWords((prev) => [created, ...prev]);
       void idbPut("words", created);
-      toast(`Added "${created.word}" to your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`);
+      if (userRecordingBlob && blobKey) {
+        void idbPut("blobs", userRecordingBlob, blobKey);
+      }
+      unresolveProblemWord(created.normalized, targetLang);
+      if (!silent) {
+        toast(`Added "${created.word}" to your ${targetLang === "hi" ? "Hindi" : "English"} Word Bank`);
+      }
       return { word: created, existed: false };
     },
-    [toast]
+    [toast, unresolveProblemWord]
+  );
+
+  const addWordsBatch = useCallback(
+    (rawWords: string[], opts?: Omit<AddWordStoreOptions, "userRecordingBlob">) => {
+      const targetLang = opts?.language ?? practiceLangRef.current;
+      const added: PersonalWord[] = [];
+      const skipped: PersonalWord[] = [];
+      const seenNorms = new Set<string>();
+      const { silent, ...createOpts } = opts ?? {};
+
+      for (const raw of rawWords) {
+        const cleaned = raw.trim();
+        const norm = normalizeWord(cleaned);
+        if (!norm || seenNorms.has(norm)) continue;
+        seenNorms.add(norm);
+
+        const existing = allWordsRef.current.find(
+          (w) => w.normalized === norm && langOf(w) === targetLang && !w.clearedFromActive
+        );
+        if (existing) {
+          skipped.push(existing);
+          continue;
+        }
+
+        const clearedExisting = allWordsRef.current.find(
+          (w) => w.normalized === norm && langOf(w) === targetLang && w.clearedFromActive
+        );
+        if (clearedExisting) {
+          const revived: PersonalWord = {
+            ...clearedExisting,
+            status: createOpts.status ?? "difficult",
+            clearedFromActive: false,
+            nextReviewAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          allWordsRef.current = allWordsRef.current.map((w) => (w.id === revived.id ? revived : w));
+          void idbPut("words", revived);
+          unresolveProblemWord(norm, targetLang);
+          added.push(revived);
+          continue;
+        }
+
+        const created = createPersonalWord(cleaned, { ...createOpts, language: targetLang });
+        allWordsRef.current = [created, ...allWordsRef.current];
+        void idbPut("words", created);
+        unresolveProblemWord(created.normalized, targetLang);
+        added.push(created);
+      }
+
+      if (added.length > 0) {
+        const nextSnapshot = [...allWordsRef.current];
+        setAllWords(nextSnapshot);
+      }
+
+      if (!silent) {
+        const bankLabel = targetLang === "hi" ? "Hindi Word Bank" : "Word Bank";
+        if (added.length > 0 && skipped.length > 0) {
+          toast(
+            `Added ${added.length} new word${added.length === 1 ? "" : "s"} to ${bankLabel} (${skipped.length} already saved)`
+          );
+        } else if (added.length > 0) {
+          toast(`Added all ${added.length} word${added.length === 1 ? "" : "s"} to your ${bankLabel}`);
+        } else if (skipped.length > 0) {
+          toast(`All ${skipped.length} word${skipped.length === 1 ? " is" : "s are"} already in your ${bankLabel}`, "info");
+        }
+      }
+      return { added, skipped };
+    },
+    [toast, unresolveProblemWord]
   );
 
   const updateWord = useCallback(
-    (word: PersonalWord) => {
+    (word: PersonalWord, userRecordingBlob?: Blob | null) => {
+      const prevWord = allWordsRef.current.find((w) => w.id === word.id);
+      if (
+        prevWord?.userRecordingBlobKey &&
+        prevWord.userRecordingBlobKey !== word.userRecordingBlobKey
+      ) {
+        void idbDelete("blobs", prevWord.userRecordingBlobKey).catch(() => undefined);
+      }
       const stamped: PersonalWord = {
         ...word,
         language: langOf(word),
         normalized: normalizeWord(word.word),
         updatedAt: Date.now(),
       };
+      allWordsRef.current = allWordsRef.current.map((w) => (w.id === stamped.id ? stamped : w));
       setAllWords((prev) => prev.map((w) => (w.id === stamped.id ? stamped : w)));
       void idbPut("words", stamped);
+      if (userRecordingBlob && stamped.userRecordingBlobKey) {
+        void idbPut("blobs", userRecordingBlob, stamped.userRecordingBlobKey);
+      }
       toast(`Updated "${stamped.word}"`);
     },
     [toast]
@@ -555,6 +773,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const deleteWord = useCallback(
     (id: string) => {
       const target = allWordsRef.current.find((w) => w.id === id);
+      if (target?.userRecordingBlobKey) {
+        void idbDelete("blobs", target.userRecordingBlobKey).catch(() => undefined);
+      }
+      allWordsRef.current = allWordsRef.current.filter((w) => w.id !== id);
       setAllWords((prev) => prev.filter((w) => w.id !== id));
       void idbDelete("words", id);
       setPracticeWordId((cur) => (cur === id ? null : cur));
@@ -637,6 +859,113 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       return updated;
     },
     [addLog, saveRecording, toast]
+  );
+
+  const completeFiveRepSession = useCallback(
+    async (params: {
+      word: string;
+      language?: PracticeLanguage;
+      reps: { transcript: string; correct: boolean; similarityPct: number; ts: number }[];
+      durationSec: number;
+    }): Promise<{ passed: boolean; correctCount: number; resolvedWord: boolean }> => {
+      const lang = params.language ?? practiceLangRef.current;
+      const norm = normalizeWord(params.word);
+      const now = Date.now();
+      const correctCount = params.reps.filter((r) => r.correct).length;
+      const totalCount = params.reps.length;
+      const passed = correctCount >= FIVE_REP_PASS_THRESHOLD;
+      const pctScore = Math.round((correctCount / Math.max(1, totalCount)) * 100);
+
+      // Update saved Word Bank entry if one exists — keep 100% of attempt history & progress stats!
+      const bankWord = allWordsRef.current.find((w) => w.normalized === norm && langOf(w) === lang);
+      if (bankWord) {
+        const { updated } = applyFiveRepResult(bankWord, params.reps, now);
+        allWordsRef.current = [updated, ...allWordsRef.current.filter((w) => w.id !== updated.id)];
+        setAllWords((prev) => [updated, ...prev.filter((w) => w.id !== updated.id)]);
+        await idbPut("words", updated);
+      }
+
+      // If >= 4 of 5 passed, mark word cleared from active problematic word lists while preserving history
+      if (passed && norm) {
+        setSettingsState((prev) => {
+          const existingList = prev.resolvedProblemWords ?? [];
+          const record: ResolvedProblemWord = {
+            normalized: norm,
+            word: params.word.trim(),
+            language: lang,
+            correctCount,
+            totalReps: totalCount,
+            resolvedAt: now,
+          };
+          const nextList = [
+            record,
+            ...existingList.filter((r) => !(r.normalized === norm && r.language === lang)),
+          ];
+          const next: Settings = { ...prev, resolvedProblemWords: nextList };
+          void idbPut("kv", { ...next, key: "settings" });
+          return next;
+        });
+      }
+
+      // Always record a PracticeLog so past progress, minutes, streak & score history stay preserved
+      addLog({
+        language: lang,
+        seconds: Math.max(15, Math.round(params.durationSec)),
+        mode: "word-bank",
+        completed: 1,
+        scores: null,
+        overallScore: pctScore,
+        note: passed
+          ? `5-Rep Cleared: "${params.word}" (${correctCount}/${totalCount} correct)`
+          : `5-Rep Practice: "${params.word}" (${correctCount}/${totalCount} correct)`,
+      });
+
+      setNowMs(now);
+      if (passed) {
+        toast(
+          `Cleared "${params.word}" (${correctCount}/${totalCount} correct) — removed from active problem words, history kept!`
+        );
+      } else {
+        toast(
+          `"${params.word}": ${correctCount}/${totalCount} correct — stays in active practice until you hit 4/5.`,
+          "info"
+        );
+      }
+
+      return { passed, correctCount, resolvedWord: passed };
+    },
+    [addLog, toast]
+  );
+
+  const completeQuickWordCheck = useCallback(
+    (word: string, lang?: PracticeLanguage, durationSec = 15) => {
+      const targetLang = lang ?? practiceLangRef.current;
+      addLog({
+        language: targetLang,
+        seconds: Math.max(10, Math.round(durationSec)),
+        mode: "word-bank",
+        completed: 1,
+        scores: null,
+        overallScore: 92,
+        note: `Quick Word Practice: "${word.trim()}" pronounced accurately`,
+      });
+      setNowMs(Date.now());
+      toast(`Nice! "${word.trim()}" pronounced accurately.`);
+    },
+    [addLog, toast]
+  );
+
+  const isProblemWordResolved = useCallback(
+    (rawWord: string, lang?: PracticeLanguage): boolean => {
+      const targetLang = lang ?? practiceLanguage;
+      const norm = normalizeWord(rawWord);
+      if (!norm) return false;
+      const list = settings.resolvedProblemWords ?? [];
+      if (list.some((r) => r.normalized === norm && r.language === targetLang)) return true;
+      const bankMatch = allWords.find((w) => w.normalized === norm && langOf(w) === targetLang);
+      return Boolean(bankMatch?.clearedFromActive);
+    },
+    [settings.resolvedProblemWords, allWords, practiceLanguage]
   );
 
   const deleteRecording = useCallback(async (id: string) => {
@@ -764,6 +1093,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         for (const r of allRecordings) {
           if (r.hasAudio) blobEntries.push({ key: r.id, mime: r.mimeType });
         }
+        for (const w of allWords) {
+          if (w.userRecordingBlobKey) {
+            blobEntries.push({
+              key: w.userRecordingBlobKey,
+              mime: w.userRecordingMimeType || "audio/webm",
+            });
+          }
+        }
         for (const sh of shadowItems) {
           blobEntries.push({ key: sh.audioBlobKey, mime: sh.mimeType });
           for (const a of sh.attempts) blobEntries.push({ key: a.audioBlobKey, mime: a.mimeType });
@@ -845,7 +1182,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         await idbClear("debriefs");
         for (const d of p.debriefs ?? []) await idbPut("debriefs", d);
         await idbClear("words").catch(() => undefined);
-        for (const w of p.words ?? []) await idbPut("words", w);
+        for (const w of p.words ?? []) {
+          await idbPut("words", w);
+          if (w.userRecordingBlobKey) {
+            const wEntry = p.blobs?.[w.userRecordingBlobKey];
+            if (wEntry?.data) await idbPut("blobs", b64ToBlob(wEntry.data, wEntry.mime), w.userRecordingBlobKey);
+          }
+        }
         await idbClear("shadowItems").catch(() => undefined);
         for (const sh of p.shadowItems ?? []) {
           await idbPut("shadowItems", sh);
@@ -978,8 +1321,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const improvement = useMemo(() => computeOverallImprovement(recordings), [recordings]);
   const commonMistakes = useMemo(() => analyzeCommonMistakes(recordings), [recordings]);
 
+  const resolvedProblemWords = useMemo(
+    () => (settings.resolvedProblemWords ?? []).filter((r) => r.language === practiceLanguage),
+    [settings.resolvedProblemWords, practiceLanguage]
+  );
+
   const dueWords = useMemo(
-    () => (nowMs > 0 ? getDueWords(words, nowMs) : words.filter((w) => w.status !== "mastered")),
+    () =>
+      nowMs > 0
+        ? getDueWords(words, nowMs)
+        : words.filter((w) => w.status !== "mastered" && !w.clearedFromActive),
     [words, nowMs]
   );
   const { weakSounds, weakCombos } = useMemo(
@@ -1050,6 +1401,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     closeAddWord,
     practiceWordId,
     setPracticeWordId,
+    fiveRepTarget,
+    openFiveRepPractice,
+    closeFiveRepPractice,
+    completeFiveRepSession,
+    isProblemWordResolved,
+    resolvedProblemWords,
+    quickWordModal,
+    openQuickWord,
+    closeQuickWord,
+    completeQuickWordCheck,
     setSettings,
     updateProfile,
     updateCoachPlan,
@@ -1059,8 +1420,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     updateExercise,
     deleteExercise,
     addWord,
+    addWordsBatch,
     updateWord,
     deleteWord,
+    saveBlob,
+    deleteBlob,
     recordWordAttempt,
     addLog,
     saveRecording,
@@ -1072,6 +1436,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     importJSON,
     clearAllData,
     toast,
+    dismissToast,
     stats,
     badges,
     skillAverages,

@@ -321,6 +321,8 @@ export default function ShadowView() {
     };
   }, [refPreviewUrl]);
 
+  const refFileInputRef = useRef<HTMLInputElement | null>(null);
+
   const handleRefFileUpload = (file: File | null) => {
     if (!file) return;
     if (refPreviewUrl) URL.revokeObjectURL(refPreviewUrl);
@@ -331,6 +333,21 @@ export default function ShadowView() {
     if (!title.trim()) {
       setTitle(file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "));
     }
+  };
+
+  const handleOpenFilePicker = () => {
+    if (refFileInputRef.current) {
+      refFileInputRef.current.value = "";
+      refFileInputRef.current.click();
+    }
+  };
+
+  const handleRemoveRefAudio = () => {
+    if (refPreviewUrl) URL.revokeObjectURL(refPreviewUrl);
+    if (refFileInputRef.current) refFileInputRef.current.value = "";
+    setRefFile(null);
+    setRefFileName("");
+    setRefPreviewUrl(null);
   };
 
   const toggleRecordReference = async () => {
@@ -676,34 +693,92 @@ export default function ShadowView() {
               </div>
             </div>
 
-            {/* Audio Upload OR Live Reference Record */}
+            {/* Audio Upload Button OR Live Reference Record */}
             <div className="rounded-xl border border-dashed border-[var(--line-strong)] bg-[var(--panel2)] p-4">
-              <SectionLabel>Reference Speaker Audio (Required)</SectionLabel>
-              <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
-                <label className="btn btn-brand cursor-pointer">
-                  <input
-                    type="file"
-                    accept="audio/*"
-                    className="hidden"
-                    onChange={(e) => handleRefFileUpload(e.target.files?.[0] ?? null)}
-                  />
-                  Upload Audio File (.mp3 / .wav / .m4a / .webm)
-                </label>
-                <span className="text-[12px] text-[var(--muted)]">or</span>
-                <Btn
-                  type="button"
-                  variant={recordingRef ? "danger" : "soft"}
-                  onClick={() => void toggleRecordReference()}
-                >
-                  {recordingRef ? `Stop Reference (${fmtDur(refRecSec)})` : "Record Reference Clip"}
-                </Btn>
-                {refFileName && <Chip tone="good">Loaded: {refFileName}</Chip>}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <SectionLabel>Reference Speaker Audio (Required)</SectionLabel>
+                <span className="text-[11px] font-medium text-[var(--muted)]">
+                  MP3 · WAV · M4A · OGG · WebM
+                </span>
               </div>
-              {refPreviewUrl && (
-                <audio controls src={refPreviewUrl} className="mt-3 w-full" />
+
+              {/* Hidden native file input triggered by styled button */}
+              <input
+                ref={refFileInputRef}
+                type="file"
+                accept=".mp3,.wav,.m4a,.webm,.ogg,audio/*"
+                className="sr-only"
+                aria-label="Upload Audio File"
+                onChange={(e) => handleRefFileUpload(e.target.files?.[0] ?? null)}
+              />
+
+              {!refFile ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2.5">
+                  <Btn type="button" variant="primary" onClick={handleOpenFilePicker}>
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M8 10.5V2.5M4.5 6L8 2.5 11.5 6" />
+                      <path d="M2.5 11v2a1 1 0 001 1h9a1 1 0 001-1v-2" />
+                    </svg>
+                    Upload Audio File
+                  </Btn>
+                  <span className="text-[12px] text-[var(--muted)]">or</span>
+                  <Btn
+                    type="button"
+                    variant={recordingRef ? "danger" : "soft"}
+                    onClick={() => void toggleRecordReference()}
+                  >
+                    {recordingRef ? `Stop Reference (${fmtDur(refRecSec)})` : "Record Reference Clip"}
+                  </Btn>
+                </div>
+              ) : (
+                <div className="mt-3 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--brand)_14%,transparent)] text-[var(--brand)]">
+                        <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7">
+                          <path d="M9 2H4.5A1.5 1.5 0 003 3.5v9A1.5 1.5 0 004.5 14h7a1.5 1.5 0 001.5-1.5V6L9 2z" />
+                          <path d="M9 2v4h4" />
+                        </svg>
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-semibold text-[var(--ink)]">
+                          {refFileName || "Selected audio clip"}
+                        </p>
+                        <p className="text-[11px] text-[var(--muted)]">
+                          {refFile.size >= 1024 * 1024
+                            ? `${(refFile.size / (1024 * 1024)).toFixed(2)} MB`
+                            : `${Math.max(1, Math.round(refFile.size / 1024))} KB`}{" "}
+                          · Ready for delivery analysis
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Btn type="button" variant="soft" onClick={handleOpenFilePicker}>
+                        Replace
+                      </Btn>
+                      <Btn type="button" variant="ghost" onClick={handleRemoveRefAudio}>
+                        Remove
+                      </Btn>
+                    </div>
+                  </div>
+                  {refPreviewUrl && (
+                    <audio controls src={refPreviewUrl} className="mt-2.5 h-9 w-full" />
+                  )}
+                </div>
               )}
-              <p className="mt-2 text-[11.5px] text-[var(--muted)]">
-                Tip: Best results with 5–60 second clean speaker clips (1–5 sentences). Stored 100% locally in your browser&apos;s IndexedDB.
+
+              <p className="mt-2.5 text-[11.5px] text-[var(--muted)]">
+                Best with 5–60 second clean speaker clips (1–5 sentences). Stored 100% locally in your browser.
               </p>
             </div>
 

@@ -13,6 +13,8 @@ import WordBankView from "@/components/WordBankView";
 import ShadowView from "@/components/ShadowView";
 import AddWordModal from "@/components/AddWordModal";
 import WordPracticeModal from "@/components/WordPracticeModal";
+import { FiveRepWordModal } from "@/components/FiveRepWordModal";
+import { QuickWordWidget } from "@/components/QuickWordWidget";
 import OnboardingFlow from "@/components/OnboardingFlow";
 import GuidedSessionModal from "@/components/GuidedSessionModal";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -141,6 +143,7 @@ function Shell() {
     shadowItems,
     backupDue,
     toasts,
+    dismissToast,
     guidedOpen,
     setGuidedOpen,
     onboardingOpen,
@@ -325,10 +328,12 @@ function Shell() {
         )}
       </main>
 
-      {/* Global Modals: Guided Daily Session, Add/Edit Word, Smart Word Pronunciation Coach */}
+      {/* Global Modals & Quick Word Practice Widget */}
       <GuidedSessionModal open={guidedOpen} onClose={() => setGuidedOpen(false)} />
       <AddWordModal />
       <WordPracticeModal />
+      <FiveRepWordModal />
+      {!showOnboarding && <QuickWordWidget />}
 
       {/* Mobile bottom nav */}
       {!showOnboarding && (
@@ -356,10 +361,16 @@ function Shell() {
         </nav>
       )}
 
-      {/* Toasts */}
-      <div className="pointer-events-none fixed bottom-16 right-4 z-50 flex flex-col gap-2 md:bottom-6">
+      {/* Toasts (auto-dismissing & click-to-dismiss) */}
+      <div className="pointer-events-none fixed bottom-28 right-4 z-[90] flex flex-col gap-2 md:bottom-16">
         {toasts.map((t) => (
-          <div key={t.id} className="toast">
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => dismissToast(t.id)}
+            className="toast text-left"
+            title="Dismiss notification"
+          >
             {t.kind === "ok" && (
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="var(--good)" strokeWidth="2">
                 <path d="M2.5 7.5L5.5 10.5 11.5 3.5" />
@@ -375,8 +386,8 @@ function Shell() {
                 <path d="M7 6.5V10M7 3.8v.4" />
               </svg>
             )}
-            {t.msg}
-          </div>
+            <span>{t.msg}</span>
+          </button>
         ))}
       </div>
     </div>

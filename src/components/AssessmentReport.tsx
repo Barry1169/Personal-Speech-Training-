@@ -1,17 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { DetailedAssessment, DimensionScore, RecordingAnalysis } from "@/lib/types";
 import { normalizeWord } from "@/lib/pronunciation";
 import { speakSingle } from "@/lib/tts";
 import { useStore } from "@/lib/store";
-import { Btn, Chip, Ring, ScoreBar, SectionLabel } from "./ui";
+import {
+  Btn,
+  Chip,
+  InfoToggleBtn,
+  Ring,
+  ScoreBar,
+  SectionLabel,
+  WordDrillControls,
+  WordPronunciation,
+} from "./ui";
 
-const EVIDENCE_BADGE: Record<DimensionScore["evidenceKind"], { label: string; tone: "brand" | "accent" | "muted" }> = {
+const EVIDENCE_BADGE: Record<
+  DimensionScore["evidenceKind"],
+  { label: string; tone: "brand" | "accent" | "muted" }
+> = {
   measured: { label: "Measured", tone: "brand" },
   hybrid: { label: "Measured + Self", tone: "accent" },
   self: { label: "Self-Check", tone: "muted" },
 };
+
+function statusLabelForScore(score: number | null, pending?: boolean): {
+  text: string;
+  tone: "good" | "brand" | "warn" | "bad" | "muted";
+} {
+  if (pending || score == null) return { text: "Needs self-check", tone: "muted" };
+  if (score >= 85) return { text: "Strong", tone: "good" };
+  if (score >= 70) return { text: "On target", tone: "brand" };
+  if (score >= 55) return { text: "Developing", tone: "warn" };
+  return { text: "Focus area", tone: "bad" };
+}
 
 export default function AssessmentReport({
   assessment,
@@ -28,14 +51,39 @@ export default function AssessmentReport({
   onPracticeText?: (title: string, text: string) => void;
   compact?: boolean;
 }) {
-  const { settings, words, addWord, openAddWord, setPracticeWordId } = useStore();
+  const {
+    settings,
+    practiceLanguage,
+    words,
+    addWord,
+    addWordsBatch,
+    openAddWord,
+    openFiveRepPractice,
+    openQuickWord,
+    isProblemWordResolved,
+    setPracticeWordId,
+  } = useStore();
+
+  const preferredVoice =
+    practiceLanguage === "hi" ? settings.preferredVoiceHi : settings.preferredVoice;
+
   const [showFormula, setShowFormula] = useState(false);
+  const [openDims, setOpenDims] = useState<Record<string, boolean>>({});
+  const [openWords, setOpenWords] = useState<Record<string, boolean>>({});
+  const [openSentences, setOpenSentences] = useState<Record<number, boolean>>({});
   const [drillOpen, setDrillOpen] = useState(false);
   const [drillIdx, setDrillIdx] = useState(0);
 
+  const toggleDim = (key: string) =>
+    setOpenDims((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleWordInfo = (key: string) =>
+    setOpenWords((prev) => ({ ...prev, [key]: !prev[key] }));
+  const toggleSentenceInfo = (idx: number) =>
+    setOpenSentences((prev) => ({ ...prev, [idx]: !prev[idx] }));
+
   const findSavedWord = (raw: string) => {
     const norm = normalizeWord(raw);
-    return words.find((w) => w.normalized === norm) ?? null;
+    return words.find((w) => w.normalized === norm && !w.clearedFromActive) ?? null;
   };
 
   const dims: DimensionScore[] = [
@@ -47,98 +95,167 @@ export default function AssessmentReport({
     assessment.dimensions.expression,
   ];
 
+  const allDimsOpen = dims.every((d) => Boolean(openDims[d.key]));
+  const toggleAllDims = () => {
+    if (allDimsOpen) {
+      setOpenDims({});
+    } else {
+      const next: Record<string, boolean> = {};
+      dims.forEach((d) => {
+        next[d.key] = true;
+      });
+      setOpenDims(next);
+    }
+  };
+
   const delta = previousScore != null ? assessment.overallScore - previousScore : null;
-  const problemWords = assessment.problemWords;
-  const activeDrillWord = problemWords[drillIdx] ?? problemWords[0];
+
+  // Filter out words cleared through the 5-rep mastery system from active practice while tracking count
+  const { activeProblemWords, clearedCount } = useMemo(() => {
+    const active = assessment.problemWords.filter(
+      (pw) => pw.kind === "filler" || !isProblemWordResolved(pw.word, practiceLanguage)
+    );
+    return {
+      activeProblemWords: active,
+      clearedCount: assessment.problemWords.length - active.length,
+    };
+  }, [assessment.problemWords, isProblemWordResolved, practiceLanguage]);
+
+  // Candidate words eligible for "+ Add All" (non-filler words, deduplicated)
+  const addableWords = useMemo(
+    () => activeProblemWords.filter((pw) => pw.kind !== "filler").map((pw) => pw.word),
+    [activeProblemWords]
+  );
+
+  const unsavedAddableWords = useMemo(() => {
+    const seen = new Set<string>();
+    return addableWords.filter((w) => {
+      const n = normalizeWord(w);
+      if (!n || seen.has(n)) return false;
+      seen.add(n);
+      return !words.some((saved) => saved.normalized === n && !saved.clearedFromActive);
+    });
+  }, [addableWords, words]);
+
+  const safeDrillIdx = Math.min(drillIdx, Math.max(0, activeProblemWords.length - 1));
+  const activeDrillWord = activeProblemWords[safeDrillIdx] ?? null;
+
+  const handleAddAll = () => {
+    if (addableWords.length === 0) return;
+    addWordsBatch(addableWords, {
+      language: practiceLanguage,
+      source: "assessment",
+      status: "difficult",
+    });
+  };
 
   return (
-    <div className="grid gap-5">
-      {/* Overall score header */}
-      <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-5">
-        <div className="flex flex-wrap items-center gap-5">
-          <Ring value={assessment.overallScore / 100} size={92} stroke={8}>
+    <div className="grid gap-4">
+      {/* Compact Overall Score Header with i toggle for formula/measurement details */}
+      <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+        <div className="flex flex-wrap items-center gap-4">
+          <Ring value={assessment.overallScore / 100} size={80} stroke={7}>
             <div className="text-center">
-              <p className="font-display text-[24px] font-bold leading-none">{assessment.overallScore}</p>
-              <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted)]">of 100</p>
+              <p className="font-display text-[22px] font-bold leading-none tabular-nums">
+                {assessment.overallScore}
+              </p>
+              <p className="mt-0.5 text-[9.5px] font-semibold uppercase tracking-wide text-[var(--muted)]">
+                of 100
+              </p>
             </div>
           </Ring>
 
           <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <Chip tone={assessment.overallScore >= 80 ? "good" : assessment.overallScore >= 60 ? "warn" : "bad"}>
-                {assessment.overallScore >= 85
-                  ? "Strong delivery"
-                  : assessment.overallScore >= 70
-                  ? "Solid foundation"
-                  : assessment.overallScore >= 55
-                  ? "Building control"
-                  : "Focus on fundamentals"}
-              </Chip>
-              {delta != null && (
-                <Chip tone={delta > 0 ? "good" : delta < 0 ? "warn" : "muted"}>
-                  {delta > 0 ? `+${delta} vs previous attempt` : delta < 0 ? `${delta} vs previous attempt` : "Same as previous attempt"}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Chip
+                  tone={
+                    assessment.overallScore >= 80
+                      ? "good"
+                      : assessment.overallScore >= 60
+                      ? "warn"
+                      : "bad"
+                  }
+                >
+                  {assessment.overallScore >= 85
+                    ? "Strong delivery"
+                    : assessment.overallScore >= 70
+                    ? "Solid foundation"
+                    : assessment.overallScore >= 55
+                    ? "Building control"
+                    : "Focus on fundamentals"}
                 </Chip>
-              )}
-              <button
-                type="button"
+                {delta != null && (
+                  <Chip tone={delta > 0 ? "good" : delta < 0 ? "warn" : "muted"}>
+                    {delta > 0
+                      ? `+${delta} vs last`
+                      : delta < 0
+                      ? `${delta} vs last`
+                      : "Same as last"}
+                  </Chip>
+                )}
+              </div>
+              <InfoToggleBtn
+                open={showFormula}
                 onClick={() => setShowFormula((v) => !v)}
-                className="chip chip-muted cursor-pointer hover:brightness-95"
-              >
-                {showFormula ? "Hide scoring math" : "How this score was calculated"}
-              </button>
+                label="How this score was calculated"
+              />
             </div>
 
-            <p className="mt-2 text-[13px] leading-relaxed text-[var(--muted)]">{assessment.overallBasis}</p>
-
-            {/* Key raw measurable strip */}
-            <div className="mt-3 flex flex-wrap gap-2 text-[12px]">
-              <span className="rounded-lg bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums">
-                Speed: <strong className="text-[var(--ink)]">{analysis.wpm != null ? `${analysis.wpm} WPM` : "n/a"}</strong>
+            {/* Key scannable metrics strip */}
+            <div className="mt-2.5 flex flex-wrap gap-1.5 text-[12px]">
+              <span className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums text-[var(--muted)]">
+                Speed{" "}
+                <strong className="text-[var(--ink)]">
+                  {analysis.wpm != null ? `${analysis.wpm} WPM` : "n/a"}
+                </strong>
               </span>
-              <span className="rounded-lg bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums">
-                Fillers: <strong className="text-[var(--ink)]">{analysis.fillerTotal}</strong>
+              <span className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums text-[var(--muted)]">
+                Fillers <strong className="text-[var(--ink)]">{analysis.fillerTotal}</strong>
               </span>
-              <span className="rounded-lg bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums">
-                Long pauses: <strong className="text-[var(--ink)]">{analysis.longPauses}</strong>
+              <span className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums text-[var(--muted)]">
+                Long pauses <strong className="text-[var(--ink)]">{analysis.longPauses}</strong>
               </span>
               {analysis.pitch && (
-                <span className="rounded-lg bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums">
-                  Pitch span: <strong className="text-[var(--ink)]">{analysis.pitch.semitoneRange.toFixed(1)} semitones</strong>
+                <span className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums text-[var(--muted)]">
+                  Pitch{" "}
+                  <strong className="text-[var(--ink)]">
+                    {analysis.pitch.semitoneRange.toFixed(1)} st
+                  </strong>
                 </span>
               )}
               {analysis.coverage != null && (
-                <span className="rounded-lg bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums">
-                  Script match (STT): <strong className="text-[var(--ink)]">{analysis.coverage}%</strong>
+                <span className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] px-2.5 py-1 font-medium tabular-nums text-[var(--muted)]">
+                  Match <strong className="text-[var(--ink)]">{analysis.coverage}%</strong>
                 </span>
               )}
             </div>
           </div>
         </div>
 
-        {/* Expandable transparency drawer */}
+        {/* Expandable scoring breakdown */}
         {showFormula && (
-          <div className="mt-4 grid gap-3 border-t border-[var(--line)] pt-4 sm:grid-cols-2">
-            <div className="rounded-xl bg-[var(--panel2)] p-3.5">
-              <SectionLabel>Directly Measured Evidence</SectionLabel>
-              <ul className="mt-2 grid gap-1.5 text-[12px] leading-relaxed text-[var(--ink)]">
-                {assessment.measurableSummary.length > 0 ? (
-                  assessment.measurableSummary.map((line, i) => (
+          <div className="mt-4 grid gap-3 border-t border-[var(--line)] pt-3.5 text-[12px] sm:grid-cols-2">
+            <div className="rounded-xl bg-[var(--panel2)] p-3">
+              <SectionLabel>Measured Evidence</SectionLabel>
+              <p className="mt-1.5 text-[var(--muted)]">{assessment.overallBasis}</p>
+              {assessment.measurableSummary.length > 0 && (
+                <ul className="mt-2 grid gap-1 text-[var(--ink)]">
+                  {assessment.measurableSummary.map((line, i) => (
                     <li key={i}>
                       <span className="mr-1.5 text-[var(--brand)]">●</span>
                       {line}
                     </li>
-                  ))
-                ) : (
-                  <li className="text-[var(--muted)]">No live audio or transcript measurements captured yet.</li>
-                )}
-              </ul>
-              <p className="mt-2.5 border-t border-[var(--line)] pt-2 text-[11.5px] text-[var(--muted)]">
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2 border-t border-[var(--line)] pt-2 text-[11px] text-[var(--muted)]">
                 {assessment.formulaSummary}
               </p>
             </div>
-            <div className="rounded-xl bg-[var(--panel2)] p-3.5">
-              <SectionLabel>Subjective & Technology Boundaries</SectionLabel>
-              <ul className="mt-2 grid gap-1.5 text-[12px] leading-relaxed text-[var(--muted)]">
+            <div className="rounded-xl bg-[var(--panel2)] p-3">
+              <SectionLabel>Measurement Notes</SectionLabel>
+              <ul className="mt-1.5 grid gap-1 text-[var(--muted)]">
                 {assessment.subjectiveNotes.map((line, i) => (
                   <li key={i}>
                     <span className="mr-1.5 text-[var(--accent)]">◆</span>
@@ -151,54 +268,102 @@ export default function AssessmentReport({
         )}
       </div>
 
-      {/* Six Dimension Breakdown */}
-      <div className={`grid gap-3 ${compact ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
-        {dims.map((d) => {
-          const badge = EVIDENCE_BADGE[d.evidenceKind];
-          return (
-            <div key={d.key} className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-[13.5px] font-semibold">{d.label}</p>
-                  <p className="mt-0.5 text-[11.5px] tabular-nums text-[var(--muted)]">{d.rawDisplay}</p>
+      {/* Six Compact Expandable Category Cards (Pronunciation, Clarity, Pace, Fluency, Pauses, Expression) */}
+      <div>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <SectionLabel>Category Scores</SectionLabel>
+          <button
+            type="button"
+            onClick={toggleAllDims}
+            className="text-[11.5px] font-semibold text-[var(--brand)] hover:underline"
+          >
+            {allDimsOpen ? "Collapse details" : "Expand all details"}
+          </button>
+        </div>
+
+        <div className={`grid gap-2.5 ${compact ? "sm:grid-cols-2" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+          {dims.map((d) => {
+            const isOpen = Boolean(openDims[d.key]);
+            const status = statusLabelForScore(d.score, d.pendingSelfCheck);
+            const badge = EVIDENCE_BADGE[d.evidenceKind];
+            return (
+              <div
+                key={d.key}
+                onClick={() => toggleDim(d.key)}
+                className={`cursor-pointer rounded-xl border bg-[var(--panel)] p-3.5 transition-colors ${
+                  isOpen
+                    ? "border-[var(--brand)]"
+                    : "border-[var(--line)] hover:border-[var(--line-strong)]"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-[13.5px] font-semibold text-[var(--ink)]">{d.label}</p>
+                    <p className="mt-0.5 truncate text-[11.5px] tabular-nums text-[var(--muted)]">
+                      {d.rawDisplay}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <div className="text-right">
+                      <p className="font-display text-[19px] font-bold leading-none tabular-nums text-[var(--ink)]">
+                        {d.score != null ? d.score : "–"}
+                        <span className="text-[10.5px] font-medium text-[var(--muted)]">/100</span>
+                      </p>
+                      <Chip tone={status.tone} className="mt-1">
+                        {status.text}
+                      </Chip>
+                    </div>
+                    <InfoToggleBtn
+                      open={isOpen}
+                      onClick={() => toggleDim(d.key)}
+                      label={`${d.label} detailed insight`}
+                    />
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-display text-[20px] font-bold leading-none tabular-nums">
-                    {d.score != null ? d.score : "–"}
-                    <span className="text-[11px] font-medium text-[var(--muted)]">/100</span>
-                  </p>
-                  <Chip tone={badge.tone} className="mt-1">
-                    {d.pendingSelfCheck ? "Self-Check Needed" : badge.label}
-                  </Chip>
+
+                <div className="mt-2.5">
+                  <ScoreBar value={d.score ?? 0} tone={d.pendingSelfCheck ? "brand" : undefined} />
                 </div>
+
+                {isOpen && (
+                  <div
+                    className="mt-3 space-y-1.5 border-t border-[var(--line)] pt-2.5 text-[12px] leading-relaxed"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10.5px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                        Detailed Insight
+                      </span>
+                      <Chip tone={badge.tone}>
+                        {d.pendingSelfCheck ? "Self-Check Needed" : badge.label}
+                      </Chip>
+                    </div>
+                    <p className="text-[var(--ink)]">
+                      <strong className="text-[var(--muted)]">Evidence: </strong>
+                      {d.evidence}
+                    </p>
+                    <p className="text-[var(--muted)]">
+                      <strong className="text-[var(--ink)]">Coach note: </strong>
+                      {d.interpretation}
+                    </p>
+                    <p className="font-medium text-[var(--brand)]">→ {d.tip}</p>
+                  </div>
+                )}
               </div>
-              <div className="mt-2.5">
-                <ScoreBar value={d.score ?? 0} tone={d.pendingSelfCheck ? "brand" : undefined} />
-              </div>
-              <p className="mt-2.5 text-[12px] leading-relaxed text-[var(--ink)]">
-                <strong className="text-[var(--muted)]">Evidence: </strong>
-                {d.evidence}
-              </p>
-              <p className="mt-1.5 text-[12px] leading-relaxed text-[var(--muted)]">
-                <strong className="text-[var(--ink)]">Coach note: </strong>
-                {d.interpretation}
-              </p>
-              <p className="mt-1.5 text-[11.5px] leading-relaxed text-[var(--brand)]">
-                → {d.tip}
-              </p>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
-      {/* Strengths vs Improvements */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-[color-mix(in_srgb,var(--good)_30%,var(--line))] bg-[color-mix(in_srgb,var(--good)_5%,var(--panel))] p-4">
-          <SectionLabel>What you did well</SectionLabel>
-          <ul className="mt-2.5 grid gap-2">
-            {assessment.strengths.map((s, i) => (
-              <li key={i} className="flex items-start gap-2 text-[13px] leading-relaxed">
-                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--good)] text-[10px] font-bold text-white">
+      {/* Concise Key Takeaways (Strengths & Focus Points) */}
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-xl border border-[color-mix(in_srgb,var(--good)_32%,var(--line))] bg-[color-mix(in_srgb,var(--good)_6%,var(--panel))] p-3.5">
+          <SectionLabel>Going Well</SectionLabel>
+          <ul className="mt-2 grid gap-1.5">
+            {assessment.strengths.slice(0, 3).map((s, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12.5px] leading-snug text-[var(--ink)]">
+                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--good)] text-[9.5px] font-bold text-white">
                   ✓
                 </span>
                 <span>{s}</span>
@@ -206,12 +371,12 @@ export default function AssessmentReport({
             ))}
           </ul>
         </div>
-        <div className="rounded-xl border border-[color-mix(in_srgb,var(--accent)_35%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_5%,var(--panel))] p-4">
-          <SectionLabel>What needs improvement</SectionLabel>
-          <ul className="mt-2.5 grid gap-2">
-            {assessment.improvements.map((s, i) => (
-              <li key={i} className="flex items-start gap-2 text-[13px] leading-relaxed">
-                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[10px] font-bold text-white">
+        <div className="rounded-xl border border-[color-mix(in_srgb,var(--accent)_35%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_6%,var(--panel))] p-3.5">
+          <SectionLabel>Next Focus</SectionLabel>
+          <ul className="mt-2 grid gap-1.5">
+            {assessment.improvements.slice(0, 3).map((s, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12.5px] leading-snug text-[var(--ink)]">
+                <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[9.5px] font-bold text-white">
                   !
                 </span>
                 <span>{s}</span>
@@ -221,65 +386,118 @@ export default function AssessmentReport({
         </div>
       </div>
 
-      {/* Specific Problematic Words & Sentences + Re-practice Loop */}
-      {(problemWords.length > 0 || assessment.problemSentences.length > 0) && (
-        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+      {/* Problem Words (with Inline Pronunciation, 0.7x/1.0x/Record Word, 5-Rep Practice & + Add All) */}
+      {(activeProblemWords.length > 0 ||
+        clearedCount > 0 ||
+        assessment.problemSentences.length > 0) && (
+        <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
             <div>
-              <h4 className="font-display text-[15px] font-semibold">Specific Problem Words & Sentences</h4>
-              <p className="text-[12px] text-[var(--muted)]">
-                Listen to the model pronunciation, drill the tricky spots slowly, then retry cleanly.
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="font-display text-[15px] font-semibold text-[var(--ink)]">
+                  Words & Sentences to Practice
+                </h4>
+                {clearedCount > 0 && (
+                  <Chip tone="good">
+                    ✓ {clearedCount} word{clearedCount === 1 ? "" : "s"} cleared (4/5+)
+                  </Chip>
+                )}
+              </div>
+              <p className="mt-0.5 text-[12px] text-[var(--muted)]">
+                Listen at 0.7x / 1.0x, record a word check, or pass 4 of 5 reps to clear a word.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              {problemWords.length > 0 && (
-                <Btn variant="soft" onClick={() => { setDrillOpen((o) => !o); setDrillIdx(0); }}>
-                  {drillOpen ? "Close Word Drill" : `Practice ${problemWords.length} Problem Word${problemWords.length > 1 ? "s" : ""}`}
+
+            <div className="flex flex-wrap items-center gap-2">
+              {addableWords.length > 0 && (
+                <Btn
+                  variant={unsavedAddableWords.length > 0 ? "soft" : "ghost"}
+                  disabled={unsavedAddableWords.length === 0}
+                  onClick={handleAddAll}
+                  title="Save all detected unfamiliar/problem words to your Word Bank (skips duplicates)"
+                >
+                  {unsavedAddableWords.length > 0
+                    ? `+ Add All (${unsavedAddableWords.length})`
+                    : "✓ All Added"}
                 </Btn>
               )}
-              {onRetryExercise && (
-                <Btn onClick={onRetryExercise}>Retry Full Exercise</Btn>
+              {activeProblemWords.length > 0 && (
+                <Btn
+                  variant="soft"
+                  onClick={() => {
+                    setDrillOpen((o) => !o);
+                    setDrillIdx(0);
+                  }}
+                >
+                  {drillOpen ? "Close Drill" : `Word Drill (${activeProblemWords.length})`}
+                </Btn>
               )}
+              {onRetryExercise && <Btn onClick={onRetryExercise}>Retry Exercise</Btn>}
             </div>
           </div>
 
-          {/* Interactive Micro-Drill for Problem Words */}
+          {/* Interactive Word Drill Stepper with inline pronunciation + [0.7x] [1.0x] [Record Word] + 5-Rep */}
           {drillOpen && activeDrillWord && (
             <div className="mt-4 rounded-xl border border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_6%,var(--panel2))] p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <Chip tone="brand">Word Drill {drillIdx + 1} of {problemWords.length}</Chip>
-                <span className="text-[11.5px] text-[var(--muted)]">{activeDrillWord.phoneticHint ?? activeDrillWord.kind}</span>
+                <Chip tone="brand">
+                  Word Drill {safeDrillIdx + 1} of {activeProblemWords.length}
+                </Chip>
+                <Chip
+                  tone={
+                    activeDrillWord.kind === "filler"
+                      ? "warn"
+                      : activeDrillWord.kind === "missing"
+                      ? "bad"
+                      : "accent"
+                  }
+                >
+                  {activeDrillWord.kind}
+                </Chip>
               </div>
-              <p className="mt-2 font-display text-[26px] font-bold tracking-tight">{activeDrillWord.word}</p>
-              <p className="mt-0.5 text-[12px] text-[var(--muted)]">Context: {activeDrillWord.context}</p>
-              <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink)]">{activeDrillWord.correctionTip}</p>
+
+              <div className="mt-2.5 flex flex-wrap items-baseline gap-2.5">
+                <p className="font-display text-[24px] font-bold tracking-tight text-[var(--ink)]">
+                  {activeDrillWord.word}
+                </p>
+                {activeDrillWord.kind !== "filler" && (
+                  <WordPronunciation
+                    word={activeDrillWord.word}
+                    language={practiceLanguage}
+                    savedWords={words}
+                  />
+                )}
+              </div>
+
+              <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
+                {activeDrillWord.correctionTip}
+              </p>
+
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Btn variant="soft" onClick={() => speakSingle(activeDrillWord.word, 0.78, settings.preferredVoice)}>
-                  Hear slow (0.78×)
-                </Btn>
-                <Btn variant="ghost" onClick={() => speakSingle(activeDrillWord.word, 1.0, settings.preferredVoice)}>
-                  Hear natural (1.0×)
-                </Btn>
-                {activeDrillWord.kind !== "filler" && (() => {
-                  const saved = findSavedWord(activeDrillWord.word);
-                  return saved ? (
-                    <Btn variant="ghost" onClick={() => setPracticeWordId(saved.id)}>
-                      ✓ In Word Bank · Open Coach
-                    </Btn>
-                  ) : (
-                    <Btn
-                      variant="soft"
-                      onClick={() => addWord(activeDrillWord.word, { source: "assessment", status: "difficult" })}
-                    >
-                      + Save to Word Bank
-                    </Btn>
-                  );
-                })()}
-                <span className="text-[11.5px] text-[var(--muted)]">Say it 3× slowly, then 2× at natural pace.</span>
+                <WordDrillControls
+                  word={activeDrillWord.word}
+                  language={practiceLanguage}
+                  onRecordWord={(w) => openQuickWord(w)}
+                />
+                {activeDrillWord.kind !== "filler" && (
+                  <Btn
+                    variant="soft"
+                    onClick={() =>
+                      openFiveRepPractice({
+                        word: activeDrillWord.word,
+                        language: practiceLanguage,
+                        context: activeDrillWord.context,
+                        correctionTip: activeDrillWord.correctionTip,
+                      })
+                    }
+                  >
+                    Practice This Word (5×)
+                  </Btn>
+                )}
                 <div className="ml-auto flex gap-1.5">
                   <Btn
                     variant="ghost"
-                    disabled={drillIdx <= 0}
+                    disabled={safeDrillIdx <= 0}
                     onClick={() => setDrillIdx((i) => Math.max(0, i - 1))}
                   >
                     Prev
@@ -287,124 +505,222 @@ export default function AssessmentReport({
                   <Btn
                     variant="primary"
                     onClick={() => {
-                      if (drillIdx < problemWords.length - 1) setDrillIdx((i) => i + 1);
-                      else {
+                      if (safeDrillIdx < activeProblemWords.length - 1) {
+                        setDrillIdx((i) => i + 1);
+                      } else {
                         setDrillOpen(false);
-                        onRetryExercise?.();
                       }
                     }}
                   >
-                    {drillIdx < problemWords.length - 1 ? "Next word →" : "Done — Retry take"}
+                    {safeDrillIdx < activeProblemWords.length - 1 ? "Next →" : "Done"}
                   </Btn>
                 </div>
               </div>
             </div>
           )}
 
-          {/* Problem word list */}
-          {problemWords.length > 0 && (
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              {problemWords.map((pw, idx) => {
+          {/* Compact Problem Word Cards */}
+          {activeProblemWords.length > 0 && (
+            <div className="mt-3.5 grid gap-2.5 sm:grid-cols-2">
+              {activeProblemWords.map((pw, idx) => {
+                const cardKey = `${pw.word}-${idx}`;
                 const saved = pw.kind !== "filler" ? findSavedWord(pw.word) : null;
+                const infoOpen = Boolean(openWords[cardKey]);
+
                 return (
-                  <div key={`${pw.word}-${idx}`} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-display text-[14px] font-semibold">{pw.word}</span>
-                      <Chip tone={pw.kind === "filler" ? "warn" : pw.kind === "missing" ? "bad" : "accent"}>
-                        {pw.kind}
-                      </Chip>
-                      {pw.phoneticHint && <span className="text-[11px] text-[var(--muted)]">{pw.phoneticHint}</span>}
-                      <div className="ml-auto flex items-center gap-1">
-                        {pw.kind !== "filler" && (
-                          saved ? (
-                            <button
-                              type="button"
-                              onClick={() => setPracticeWordId(saved.id)}
-                              className="chip chip-good cursor-pointer hover:brightness-95"
-                              title="Practice this word in your Personal Word Bank"
-                            >
-                              ✓ Saved · Coach
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => addWord(pw.word, { source: "assessment", status: "difficult" })}
-                              className="chip chip-brand cursor-pointer hover:brightness-95"
-                              title="Save directly to your Personal Word Bank"
-                            >
-                              + Save Word
-                            </button>
-                          )
-                        )}
-                        <button
-                          type="button"
-                          title={`Listen to "${pw.word}"`}
-                          onClick={() => speakSingle(pw.word, 0.82, settings.preferredVoice)}
-                          className="icon-btn"
+                  <div
+                    key={cardKey}
+                    className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-3"
+                  >
+                    {/* Top row: word + inline phonetic/IPA + status + i button */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-baseline gap-1.5">
+                          <span className="font-display text-[15px] font-bold text-[var(--ink)]">
+                            {pw.word}
+                          </span>
+                          {pw.kind !== "filler" && (
+                            <WordPronunciation
+                              word={pw.word}
+                              language={practiceLanguage}
+                              savedWords={words}
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <Chip
+                          tone={
+                            pw.kind === "filler"
+                              ? "warn"
+                              : pw.kind === "missing"
+                              ? "bad"
+                              : "accent"
+                          }
                         >
-                          <svg width="13" height="13" viewBox="0 0 14 14" fill="currentColor"><path d="M3.5 2.5v9l7-4.5z" /></svg>
-                        </button>
+                          {pw.kind}
+                        </Chip>
+                        <InfoToggleBtn
+                          open={infoOpen}
+                          onClick={() => toggleWordInfo(cardKey)}
+                          label={`Details for "${pw.word}"`}
+                        />
                       </div>
                     </div>
-                    <p className="mt-1 text-[11.5px] text-[var(--muted)]">{pw.context}</p>
-                    <p className="mt-1 text-[12px] leading-relaxed text-[var(--ink)]">{pw.correctionTip}</p>
+
+                    {/* Controls row: [0.7x] [1.0x] [Record Word] + Practice This Word + Save */}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      {pw.kind !== "filler" && (
+                        <WordDrillControls
+                          word={pw.word}
+                          language={practiceLanguage}
+                          onRecordWord={(w) => openQuickWord(w)}
+                        />
+                      )}
+                      {pw.kind !== "filler" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openFiveRepPractice({
+                              word: pw.word,
+                              language: practiceLanguage,
+                              context: pw.context,
+                              correctionTip: pw.correctionTip,
+                            })
+                          }
+                          className="chip chip-brand cursor-pointer hover:brightness-95"
+                          title="Practice this word 5 times — 4/5 correct removes it from active problem words"
+                        >
+                          Practice This Word
+                        </button>
+                      )}
+                      {pw.kind !== "filler" &&
+                        (saved ? (
+                          <button
+                            type="button"
+                            onClick={() => setPracticeWordId(saved.id)}
+                            className="chip chip-good cursor-pointer hover:brightness-95"
+                            title="Open in Personal Word Bank Coach"
+                          >
+                            ✓ Saved
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              addWord(pw.word, {
+                                language: practiceLanguage,
+                                source: "assessment",
+                                status: "difficult",
+                              })
+                            }
+                            className="chip chip-muted cursor-pointer hover:border-[var(--brand)] hover:text-[var(--brand)]"
+                            title="Add to your Personal Word Bank"
+                          >
+                            + Add
+                          </button>
+                        ))}
+                      {pw.kind === "filler" && (
+                        <span className="text-[11.5px] text-[var(--muted)]">{pw.context}</span>
+                      )}
+                    </div>
+
+                    {/* Expandable coaching tip */}
+                    {infoOpen && (
+                      <div className="mt-2.5 space-y-1 border-t border-[var(--line)] pt-2 text-[11.5px] leading-relaxed">
+                        <p className="text-[var(--muted)]">{pw.context}</p>
+                        <p className="text-[var(--ink)]">{pw.correctionTip}</p>
+                      </div>
+                    )}
                   </div>
                 );
               })}
             </div>
           )}
 
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3">
+          {/* Problematic sentences — compact with i toggle */}
+          {assessment.problemSentences.length > 0 && (
+            <div className="mt-4 grid gap-2">
+              <SectionLabel>Sentences to Polish</SectionLabel>
+              {assessment.problemSentences.map((ps) => {
+                const sOpen = Boolean(openSentences[ps.index]);
+                return (
+                  <div
+                    key={ps.index}
+                    className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Chip tone={ps.matchPct >= 75 ? "warn" : "bad"}>
+                        Sentence #{ps.index} · {ps.matchPct}% match
+                      </Chip>
+                      {ps.fillers.length > 0 && (
+                        <Chip tone="warn">fillers: {ps.fillers.join(", ")}</Chip>
+                      )}
+                      <div className="ml-auto flex items-center gap-1.5">
+                        <Btn
+                          variant="ghost"
+                          onClick={() =>
+                            speakSingle(ps.sentence, 0.88, preferredVoice, practiceLanguage)
+                          }
+                        >
+                          Hear
+                        </Btn>
+                        {onPracticeText && (
+                          <Btn
+                            variant="soft"
+                            onClick={() =>
+                              onPracticeText(`Retry Sentence #${ps.index}`, ps.sentence)
+                            }
+                          >
+                            Practice
+                          </Btn>
+                        )}
+                        <InfoToggleBtn
+                          open={sOpen}
+                          onClick={() => toggleSentenceInfo(ps.index)}
+                          label={`Sentence #${ps.index} coaching tip`}
+                        />
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink)]">
+                      &ldquo;{ps.sentence}&rdquo;
+                    </p>
+                    {sOpen && (
+                      <p className="mt-2 border-t border-[var(--line)] pt-2 text-[12px] leading-relaxed text-[var(--muted)]">
+                        <strong className="text-[var(--ink)]">Tip: </strong>
+                        {ps.tip}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-3">
             <span className="text-[12px] text-[var(--muted)]">
-              Stumbled on another word during this take? Save it now so your coach trains it daily.
+              Noticed another tricky word while speaking?
             </span>
             <Btn variant="soft" onClick={() => openAddWord("", "assessment")}>
               + Add My Word
             </Btn>
           </div>
-
-          {/* Problematic sentences */}
-          {assessment.problemSentences.length > 0 && (
-            <div className="mt-4 grid gap-2">
-              <SectionLabel>Sentences to polish</SectionLabel>
-              {assessment.problemSentences.map((ps) => (
-                <div key={ps.index} className="rounded-lg border border-[var(--line)] bg-[var(--panel2)] p-3.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Chip tone={ps.matchPct >= 75 ? "warn" : "bad"}>Sentence #{ps.index} · {ps.matchPct}% match</Chip>
-                    {ps.fillers.length > 0 && <Chip tone="warn">fillers: {ps.fillers.join(", ")}</Chip>}
-                    <div className="ml-auto flex gap-1.5">
-                      <Btn variant="ghost" onClick={() => speakSingle(ps.sentence, 0.88, settings.preferredVoice)}>
-                        Hear model
-                      </Btn>
-                      {onPracticeText && (
-                        <Btn variant="soft" onClick={() => onPracticeText(`Retry Sentence #${ps.index}`, ps.sentence)}>
-                          Practice this sentence
-                        </Btn>
-                      )}
-                    </div>
-                  </div>
-                  <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--ink)]">“{ps.sentence}”</p>
-                  <p className="mt-1.5 text-[12px] leading-relaxed text-[var(--muted)]">
-                    <strong className="text-[var(--ink)]">Correction: </strong>
-                    {ps.tip}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
-      {problemWords.length === 0 && assessment.problemSentences.length === 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-4 py-3">
-          <span className="text-[12.5px] text-[var(--muted)]">
-            Felt any word catch or sound unclear while speaking? Save it to your Personal Word Bank to drill it daily.
-          </span>
-          <Btn variant="soft" onClick={() => openAddWord("", "assessment")}>
-            + Add My Word
-          </Btn>
-        </div>
-      )}
+      {activeProblemWords.length === 0 &&
+        clearedCount === 0 &&
+        assessment.problemSentences.length > 0 === false && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-4 py-3">
+            <span className="text-[12.5px] text-[var(--muted)]">
+              Stumbled on a word while speaking? Save it to practice with slow & normal audio.
+            </span>
+            <Btn variant="soft" onClick={() => openAddWord("", "assessment")}>
+              + Add My Word
+            </Btn>
+          </div>
+        )}
     </div>
   );
 }

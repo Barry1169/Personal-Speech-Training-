@@ -13,6 +13,7 @@ import {
   type WeakSoundFinding,
   type WordAttempt,
   type WordMouthGuide,
+  type WordProblemType,
   type WordStatus,
 } from "./types";
 import { hasDevanagari } from "./analytics";
@@ -624,6 +625,188 @@ const CURATED_LEXICON: Record<string, LexiconEntry> = {
     example: "Look directly into the lens so every viewer feels included.",
     sounds: ["v_w", "r"],
   },
+  always: {
+    phonetic: "awl·wayz",
+    ipa: "/ˈɔːl.weɪz/",
+    meaning: "At all times; on every occasion.",
+    example: "Always start on a relaxed breath before your first syllable.",
+    sounds: ["l", "v_w", "s_sh"],
+  },
+  intermediate: {
+    phonetic: "in·ter·MEE·dee·ut",
+    ipa: "/ˌɪn.tərˈmiː.di.ət/",
+    meaning: "Between beginner and advanced stages.",
+    example: "Give all five syllables of intermediate clear, unhurried spacing.",
+    sounds: ["r", "p_b_t_d", "vowels", "endings"],
+  },
+  tricky: {
+    phonetic: "trik·ee",
+    ipa: "/ˈtrɪk.i/",
+    meaning: "Requiring steady care and precision.",
+    example: "Ease softly into the opening TR blend on tricky words.",
+    sounds: ["p_b_t_d", "r", "clusters"],
+  },
+  calmly: {
+    phonetic: "kaam·lee",
+    ipa: "/ˈkɑːm.li/",
+    meaning: "In a quiet, relaxed, unhurried manner.",
+    example: "Drop the silent first L and glide smoothly through kaam·lee.",
+    sounds: ["l", "vowels"],
+  },
+  wednesday: {
+    phonetic: "WENZ·day",
+    ipa: "/ˈwenz.deɪ/",
+    meaning: "The middle day of the week (the first D is silent).",
+    example: "Our presentation rehearsal is scheduled for Wednesday morning.",
+    sounds: ["v_w", "s_sh", "clusters"],
+  },
+  colonel: {
+    phonetic: "KUR·nul",
+    ipa: "/ˈkɜːr.nəl/",
+    meaning: "A senior military rank (pronounced exactly like 'kernel').",
+    example: "The colonel spoke slowly with calm, steady authority.",
+    sounds: ["r", "l", "vowels"],
+  },
+  vocabulary: {
+    phonetic: "voh·KAB·yuh·lair·ee",
+    ipa: "/voʊˈkæb.jə.ler.i/",
+    meaning: "The body of words a speaker knows and uses actively.",
+    example: "Building clear spoken vocabulary takes calm daily repetition.",
+    sounds: ["v_w", "l", "r", "vowels"],
+  },
+  ship: {
+    phonetic: "ship",
+    ipa: "/ʃɪp/",
+    meaning: "A large vessel (short crisp /ɪ/ vowel).",
+    example: "Keep the vowel short and relaxed in ship.",
+    sounds: ["s_sh", "vowels", "p_b_t_d"],
+  },
+  sheep: {
+    phonetic: "sheep",
+    ipa: "/ʃiːp/",
+    meaning: "A wool-bearing animal (long smiling /iː/ vowel).",
+    example: "Stretch the long EE vowel clearly in sheep.",
+    sounds: ["s_sh", "vowels", "p_b_t_d"],
+  },
+  light: {
+    phonetic: "lyt",
+    ipa: "/laɪt/",
+    meaning: "Illumination; gentle in weight or pressure (tongue tip touches ridge).",
+    example: "Use light lip contact at the start of every phrase.",
+    sounds: ["l", "endings"],
+  },
+  right: {
+    phonetic: "ryt",
+    ipa: "/ɹaɪt/",
+    meaning: "Correct; opposite of left (tongue curls slightly back without touching).",
+    example: "Pause right before your key takeaway sentence.",
+    sounds: ["r", "endings"],
+  },
+  bat: {
+    phonetic: "bat",
+    ipa: "/bæt/",
+    meaning: "Crisp voiceless final /t/ release.",
+    example: "Tap the final T lightly in bat.",
+    sounds: ["p_b_t_d", "endings"],
+  },
+  bad: {
+    phonetic: "bad",
+    ipa: "/bæd/",
+    meaning: "Voiced final /d/ with slightly longer vowel.",
+    example: "Hold the vowel a fraction longer before the D in bad.",
+    sounds: ["p_b_t_d", "endings"],
+  },
+  full: {
+    phonetic: "fuul",
+    ipa: "/fʊl/",
+    meaning: "Complete; relaxed short /ʊ/ vowel with dark L.",
+    example: "Pause for a full calm second between points.",
+    sounds: ["vowels", "l"],
+  },
+  food: {
+    phonetic: "food",
+    ipa: "/fuːd/",
+    meaning: "Nourishment; long rounded /uː/ vowel.",
+    example: "Round your lips forward for the long OO in food.",
+    sounds: ["vowels", "endings"],
+  },
+  pull: {
+    phonetic: "puul",
+    ipa: "/pʊl/",
+    meaning: "To draw toward oneself (short relaxed /ʊ/).",
+    example: "Pull your shoulders down and let the jaw soften.",
+    sounds: ["p_b_t_d", "vowels", "l"],
+  },
+  pool: {
+    phonetic: "pool",
+    ipa: "/puːl/",
+    meaning: "A body of water (long rounded /uː/).",
+    example: "Stretch the smooth OO vowel cleanly in pool.",
+    sounds: ["p_b_t_d", "vowels", "l"],
+  },
+  think: {
+    phonetic: "think",
+    ipa: "/θɪŋk/",
+    meaning: "To consider (voiceless /θ/ — tongue tip lightly between teeth).",
+    example: "Pause to think silently instead of saying um.",
+    sounds: ["th", "endings"],
+  },
+  sink: {
+    phonetic: "sink",
+    ipa: "/sɪŋk/",
+    meaning: "To drop down (crisp /s/ behind top teeth).",
+    example: "Let the tongue stay behind the teeth for a crisp S in sink.",
+    sounds: ["s_sh", "endings"],
+  },
+  this: {
+    phonetic: "dhis",
+    ipa: "/ðɪs/",
+    meaning: "Voiced /ð/ start + crisp /s/ finish.",
+    example: "Practice this word slowly first, then at natural pace.",
+    sounds: ["th", "s_sh"],
+  },
+  these: {
+    phonetic: "dheez",
+    ipa: "/ðiːz/",
+    meaning: "Voiced /ð/ start + long /iː/ + buzzed /z/ end.",
+    example: "Connect these short phrases on one calm breath.",
+    sounds: ["th", "s_sh", "vowels"],
+  },
+  brother: {
+    phonetic: "BRUDH·er",
+    ipa: "/ˈbɹʌð.ər/",
+    meaning: "Male sibling (voiced /ð/ in the middle).",
+    example: "Keep airflow smooth across the voiced TH in brother.",
+    sounds: ["p_b_t_d", "r", "th"],
+  },
+  father: {
+    phonetic: "FAA·dher",
+    ipa: "/ˈfɑː.ðər/",
+    meaning: "Male parent (open /ɑː/ vowel + voiced /ð/).",
+    example: "Drop your jaw comfortably for the open AH in father.",
+    sounds: ["vowels", "th", "r"],
+  },
+  farther: {
+    phonetic: "FAAR·dher",
+    ipa: "/ˈfɑːɹ.ðər/",
+    meaning: "At a greater physical distance (r-colored /ɑːɹ/ + voiced /ð/).",
+    example: "Project your voice gently to reach farther across the room.",
+    sounds: ["r", "th", "vowels"],
+  },
+  vow: {
+    phonetic: "vow",
+    ipa: "/vaʊ/",
+    meaning: "A solemn promise (top teeth on lower lip for /v/).",
+    example: "Touch top teeth gently to the lower lip for vow.",
+    sounds: ["v_w", "vowels"],
+  },
+  vowed: {
+    phonetic: "vowd",
+    ipa: "/vaʊd/",
+    meaning: "Promised solemnly (voiced /d/ ending).",
+    example: "Finish the voiced D cleanly at the end of vowed.",
+    sounds: ["v_w", "endings"],
+  },
 };
 
 const CURATED_HINDI_LEXICON: Record<string, LexiconEntry> = {
@@ -1000,14 +1183,28 @@ function estimatePhoneticAndIpa(word: string): { phonetic: string; ipa: string }
   const roughIpa = normalizeWord(word)
     .replace(/tion$/g, "ʃən")
     .replace(/sion$/g, "ʒən")
-    .replace(/th/g, "θ")
-    .replace(/sh/g, "ʃ")
+    .replace(/ture$/g, "tʃər")
+    .replace(/ment$/g, "mənt")
+    .replace(/ness$/g, "nəs")
+    .replace(/able$/g, "əbəl")
+    .replace(/ible$/g, "əbəl")
+    .replace(/chh/g, "tʃʰ")
     .replace(/ch/g, "tʃ")
+    .replace(/sh/g, "ʃ")
+    .replace(/th/g, "θ")
     .replace(/ph/g, "f")
     .replace(/ng/g, "ŋ")
+    .replace(/ck/g, "k")
+    .replace(/([bcdfgjklmnpqstvz])\1+/g, "$1")
+    .replace(/aa/g, "ɑː")
     .replace(/ee|ea/g, "iː")
     .replace(/oo/g, "uː")
-    .replace(/r/g, "ɹ");
+    .replace(/oa/g, "oʊ")
+    .replace(/ai|ay/g, "eɪ")
+    .replace(/ou|ow/g, "aʊ")
+    .replace(/er$/g, "ər")
+    .replace(/le$/g, "əl")
+    .replace(/y$/g, "i");
 
   return {
     phonetic: respelled || word,
@@ -1108,29 +1305,54 @@ export function analyzeWordEntry(
   };
 }
 
+export interface CreatePersonalWordOptions {
+  language?: PracticeLanguage;
+  status?: WordStatus;
+  source?: PersonalWord["source"];
+  phonetic?: string;
+  ipa?: string;
+  meaning?: string;
+  exampleSentence?: string;
+  notes?: string;
+  mouthGuide?: Partial<WordMouthGuide>;
+  problemType?: WordProblemType;
+  problemTypeOther?: string;
+  difficultPart?: string;
+  customPronunciation?: string;
+  detectedPronunciation?: string;
+  userRecordingBlobKey?: string;
+  userRecordingMimeType?: string;
+  userRecordingTranscript?: string;
+  clearedFromActive?: boolean;
+  clearedAt?: number;
+}
+
 export function createPersonalWord(
   rawWord: string,
-  opts?: {
-    language?: PracticeLanguage;
-    status?: WordStatus;
-    source?: PersonalWord["source"];
-    phonetic?: string;
-    ipa?: string;
-    meaning?: string;
-    exampleSentence?: string;
-    notes?: string;
-    mouthGuide?: Partial<WordMouthGuide>;
-  }
+  opts?: CreatePersonalWordOptions
 ): PersonalWord {
   const analyzed = analyzeWordEntry(rawWord, opts?.language);
   const now = Date.now();
+  const customPron = opts?.customPronunciation?.trim() || undefined;
+  const effectivePhonetic = customPron || opts?.phonetic?.trim() || analyzed.phonetic;
+  const problemType = opts?.problemType;
+  const difficultPart = opts?.difficultPart?.trim() || undefined;
+
+  // Tailor airflow hint when user tags stammering or a specific difficult syllable/sound
+  let mouthAirflow = opts?.mouthGuide?.mouthAirflow?.trim() || analyzed.mouthGuide.mouthAirflow;
+  if (!opts?.mouthGuide?.mouthAirflow?.trim() && problemType === "stammering") {
+    mouthAirflow = difficultPart
+      ? `Release a soft puff of air first and glide through "${difficultPart}" with 30% lip/tongue pressure — zero throat pushing.`
+      : `Begin on a gentle exhale (soft onset) and use 30% light contact so "${analyzed.word}" glides smoothly without blocking.`;
+  }
+
   return {
     id: uid(),
     word: analyzed.word,
     normalized: analyzed.normalized,
     language: analyzed.language,
     status: opts?.status ?? "difficult",
-    phonetic: opts?.phonetic?.trim() || analyzed.phonetic,
+    phonetic: effectivePhonetic,
     ipa: opts?.ipa?.trim() || analyzed.ipa,
     ipaSource: opts?.ipa?.trim() && opts.ipa.trim() !== analyzed.ipa ? "custom" : analyzed.ipaSource,
     meaning: opts?.meaning?.trim() || analyzed.meaning,
@@ -1138,10 +1360,20 @@ export function createPersonalWord(
     mouthGuide: {
       tongue: opts?.mouthGuide?.tongue?.trim() || analyzed.mouthGuide.tongue,
       lips: opts?.mouthGuide?.lips?.trim() || analyzed.mouthGuide.lips,
-      mouthAirflow: opts?.mouthGuide?.mouthAirflow?.trim() || analyzed.mouthGuide.mouthAirflow,
+      mouthAirflow,
     },
     soundTags: analyzed.soundTags,
     source: opts?.source ?? "manual",
+    problemType,
+    problemTypeOther: problemType === "other" ? opts?.problemTypeOther?.trim() || undefined : undefined,
+    difficultPart,
+    customPronunciation: customPron,
+    detectedPronunciation: opts?.detectedPronunciation?.trim() || undefined,
+    userRecordingBlobKey: opts?.userRecordingBlobKey || undefined,
+    userRecordingMimeType: opts?.userRecordingMimeType || undefined,
+    userRecordingTranscript: opts?.userRecordingTranscript?.trim() || undefined,
+    clearedFromActive: opts?.clearedFromActive || undefined,
+    clearedAt: opts?.clearedAt || undefined,
     notes: opts?.notes?.trim() || undefined,
     attempts: [],
     masteryScore: 0,
@@ -1151,6 +1383,47 @@ export function createPersonalWord(
     lastPracticedAt: null,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+/**
+ * Formats an inline pronunciation (easy-to-read phonetic with middle dots + IPA)
+ * for any word shown in a Word Drill or Word Bank exercise, honoring user custom guidance.
+ */
+export function getInlinePronunciation(
+  rawWord: string,
+  language?: PracticeLanguage,
+  savedWords?: PersonalWord[]
+): {
+  word: string;
+  phonetic: string;
+  ipa: string;
+  ipaSource: "dictionary" | "estimated" | "custom";
+  difficultPart?: string;
+  isCustom: boolean;
+} {
+  const norm = normalizeWord(rawWord);
+  if (savedWords && norm) {
+    const match = savedWords.find((w) => w.normalized === norm);
+    if (match) {
+      const displayPhonetic = (match.customPronunciation || match.phonetic).replace(/-/g, "·");
+      return {
+        word: match.word,
+        phonetic: displayPhonetic,
+        ipa: match.ipa,
+        ipaSource: match.ipaSource,
+        difficultPart: match.difficultPart,
+        isCustom: Boolean(match.customPronunciation),
+      };
+    }
+  }
+  const analyzed = analyzeWordEntry(rawWord, language);
+  return {
+    word: analyzed.word,
+    phonetic: analyzed.phonetic.replace(/-/g, "·"),
+    ipa: analyzed.ipa,
+    ipaSource: analyzed.ipaSource,
+    isCustom: false,
   };
 }
 
@@ -1178,6 +1451,178 @@ function tokenSimilarityPct(target: string, candidate: string): number {
   if (a === b) return 100;
   const dist = levenshtein(a, b);
   return Math.max(0, Math.round((1 - dist / Math.max(a.length, b.length)) * 100));
+}
+
+export interface SingleWordCheckResult {
+  targetWord: string;
+  normalizedTarget: string;
+  detectedTranscript: string;
+  detectedWord: string;
+  correct: boolean;
+  noSpeech: boolean;
+  similarityPct: number;
+  phonetic: string;
+  ipa: string;
+  feedback: string;
+}
+
+/**
+ * Compares a single spoken word attempt against the intended word.
+ * Used by Quick Word Practice, [Record Word] drill buttons, and the 5-Repetition Word Drill.
+ */
+export function assessSingleWordPronunciation(params: {
+  targetWord: string;
+  transcript: string;
+  language?: PracticeLanguage;
+  customPhonetic?: string;
+}): SingleWordCheckResult {
+  const cleanTarget = params.targetWord.trim();
+  const normalizedTarget = normalizeWord(cleanTarget);
+  const compactTarget = normalizedTarget.replace(/[-']/g, "");
+  const analyzed = analyzeWordEntry(cleanTarget, params.language);
+  const phonetic = (params.customPhonetic?.trim() || analyzed.phonetic).replace(/-/g, "·");
+  const ipa = analyzed.ipa;
+
+  const detectedTranscript = params.transcript.replace(/\s+/g, " ").trim();
+  const tokens = detectedTranscript
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}'\s-]/gu, " ")
+    .split(/\s+/)
+    .map((t) => normalizeWord(t))
+    .filter(Boolean);
+
+  if (tokens.length === 0) {
+    return {
+      targetWord: cleanTarget,
+      normalizedTarget,
+      detectedTranscript: "",
+      detectedWord: "",
+      correct: false,
+      noSpeech: true,
+      similarityPct: 0,
+      phonetic,
+      ipa,
+      feedback: `No clear word detected. Listen at 0.7× (${phonetic}) and speak "${cleanTarget}" clearly near your mic.`,
+    };
+  }
+
+  let bestSim = 0;
+  let closest = tokens[0];
+  let exactMatch = false;
+
+  // Check individual tokens and adjacent pairs (for hyphenated/compound words like "well-being")
+  const candidates = [...tokens];
+  for (let i = 0; i < tokens.length - 1; i++) {
+    candidates.push(`${tokens[i]}${tokens[i + 1]}`);
+  }
+  const fullJoined = normalizeWord(detectedTranscript);
+  if (fullJoined && !candidates.includes(fullJoined)) {
+    candidates.push(fullJoined);
+  }
+
+  for (const cand of candidates) {
+    const compactCand = cand.replace(/[-']/g, "");
+    if (cand === normalizedTarget || (compactTarget.length >= 2 && compactCand === compactTarget)) {
+      exactMatch = true;
+      bestSim = 100;
+      closest = cand === fullJoined ? detectedTranscript : cand;
+      break;
+    }
+    const sim = tokenSimilarityPct(normalizedTarget, cand);
+    if (sim > bestSim) {
+      bestSim = sim;
+      closest = cand;
+    }
+  }
+
+  // Prefer preserving readable surface form for single-word utterances (e.g. "intermeda")
+  const displayDetected =
+    tokens.length === 1
+      ? detectedTranscript.replace(/^[^\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+$/gu, "")
+      : closest;
+
+  const feedback = exactMatch
+    ? `Clear match for "${cleanTarget}" (${phonetic}).`
+    : bestSim >= 72
+    ? `Close — heard "${displayDetected}" instead of "${cleanTarget}" (${phonetic}). Slow down on every syllable.`
+    : `Heard "${displayDetected}" instead of "${cleanTarget}". Listen to 0.7× (${phonetic} · ${ipa}) and shape each sound calmly.`;
+
+  return {
+    targetWord: cleanTarget,
+    normalizedTarget,
+    detectedTranscript,
+    detectedWord: displayDetected,
+    correct: exactMatch,
+    noSpeech: false,
+    similarityPct: bestSim,
+    phonetic,
+    ipa,
+    feedback,
+  };
+}
+
+export const FIVE_REP_TARGET = 5;
+export const FIVE_REP_PASS_THRESHOLD = 4;
+
+/**
+ * Applies the completed 5-repetition session to a PersonalWord.
+ * If >= 4 of 5 attempts are correct, automatically marks the word cleared/resolved
+ * from the active problem-word list while preserving every attempt and mastery statistic in history.
+ */
+export function applyFiveRepResult(
+  word: PersonalWord,
+  repResults: { transcript: string; correct: boolean; similarityPct: number; recordingId?: string | null; ts?: number }[],
+  nowMs: number = Date.now()
+): { updated: PersonalWord; correctCount: number; passed: boolean } {
+  const correctCount = repResults.filter((r) => r.correct).length;
+  const passed = correctCount >= FIVE_REP_PASS_THRESHOLD;
+
+  const newAttempts: WordAttempt[] = repResults.map((r, idx) => {
+    const ts = r.ts ?? nowMs + idx;
+    const score = r.correct ? 88 : Math.max(25, Math.min(62, r.similarityPct));
+    return {
+      id: uid(),
+      ts,
+      date: dateKey(ts),
+      speedMode: "natural",
+      transcript: r.transcript,
+      matchedWord: r.correct,
+      similarityPct: r.correct ? 100 : r.similarityPct,
+      selfScore: null,
+      score,
+      evidenceKind: "measured",
+      evidence: r.correct
+        ? `5-Rep Drill #${idx + 1}: Matched "${word.word}" cleanly.`
+        : `5-Rep Drill #${idx + 1}: Heard "${r.transcript || "unclear"}" (${r.similarityPct}% match to "${word.word}").`,
+      feedback: r.correct
+        ? `Clean articulation on attempt #${idx + 1}.`
+        : `Review ${word.phonetic} (${word.ipa}) at 0.7× before the next take.`,
+      recordingId: r.recordingId ?? null,
+    };
+  });
+
+  const allAttempts = [...word.attempts, ...newAttempts];
+  const sessionScore = Math.round((correctCount / Math.max(1, repResults.length)) * 100);
+  const masteryScore = passed
+    ? Math.max(word.masteryScore, Math.min(96, Math.max(85, sessionScore)))
+    : Math.round(word.masteryScore * 0.4 + sessionScore * 0.6);
+
+  const DAY = 86400000;
+  const updated: PersonalWord = {
+    ...word,
+    attempts: allAttempts,
+    masteryScore,
+    status: passed ? "mastered" : sessionScore >= 60 ? "learning" : "difficult",
+    clearedFromActive: passed ? true : word.clearedFromActive,
+    clearedAt: passed ? nowMs : word.clearedAt,
+    consecutiveSuccessDays: passed ? Math.max(1, word.consecutiveSuccessDays + 1) : word.consecutiveSuccessDays,
+    intervalDays: passed ? 30 : 1,
+    nextReviewAt: passed ? nowMs + 30 * DAY : nowMs + DAY,
+    lastPracticedAt: nowMs,
+    updatedAt: nowMs,
+  };
+
+  return { updated, correctCount, passed };
 }
 
 /**
@@ -1395,6 +1840,7 @@ export function applyWordAttempt(word: PersonalWord, attempt: WordAttempt): Pers
 
 export function getDueWords(words: PersonalWord[], nowMs: number = Date.now()): PersonalWord[] {
   return words
+    .filter((w) => !w.clearedFromActive)
     .filter((w) => w.status !== "mastered" || w.nextReviewAt <= nowMs)
     .filter((w) => w.nextReviewAt <= nowMs || w.attempts.length === 0)
     .sort((a, b) => {
@@ -1470,7 +1916,7 @@ export function detectWeakSounds(
 
   // 1. Evidence from Personal Word Bank
   for (const w of scopedWords) {
-    if (w.status === "mastered" && w.masteryScore >= 85) continue;
+    if (w.clearedFromActive || (w.status === "mastered" && w.masteryScore >= 85)) continue;
     const baseWeight = w.status === "difficult" ? 3 : 2;
     const acc = w.attempts.length > 0 ? w.masteryScore : undefined;
     for (const s of w.soundTags) {
@@ -1763,13 +2209,14 @@ export function generateCustomWordDrillContent(
   romanizedParagraph?: string;
 } {
   const scoped = words.filter((w) => langOf(w) === language);
-  const priority = scoped
+  const activePool = scoped.filter((w) => !w.clearedFromActive);
+  const priority = activePool
     .filter((w) => w.status !== "mastered")
     .sort((a, b) => {
       if (a.status !== b.status) return a.status === "difficult" ? -1 : 1;
       return a.masteryScore - b.masteryScore;
     });
-  const pool = priority.length > 0 ? priority : scoped;
+  const pool = priority.length > 0 ? priority : activePool;
   if (pool.length === 0) {
     return { targetWords: [], sentences: [], paragraph: "", annotatedParagraph: "" };
   }
@@ -1861,7 +2308,7 @@ export function buildCustomWordCoachedExercise(
   seed: number = 0,
   language: PracticeLanguage = "en"
 ): CoachedExercise | null {
-  const scoped = words.filter((w) => langOf(w) === language);
+  const scoped = words.filter((w) => langOf(w) === language && !w.clearedFromActive);
   const due = getDueWords(scoped);
   const sourcePool = due.length > 0 ? due : scoped.filter((w) => w.status !== "mastered");
   if (sourcePool.length === 0) return null;

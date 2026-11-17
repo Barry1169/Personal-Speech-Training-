@@ -331,6 +331,8 @@ export interface ActiveTask {
   exerciseId?: string;
   targetWpm?: number;
   annotatedText?: string;
+  structureSteps?: string[];
+  loadedAt?: number;
   coaching?: {
     whatToDo: string;
     howToSpeak: string;
@@ -338,6 +340,23 @@ export interface ActiveTask {
     pauseNotes: string;
     mistakesToAvoid: string[];
   };
+}
+
+export interface ResolvedProblemWord {
+  word: string;
+  normalized: string;
+  language: PracticeLanguage;
+  correctCount: number;
+  totalReps: number;
+  resolvedAt: number;
+}
+
+export interface RecorderDraft {
+  title: string;
+  script: string;
+  language: PracticeLanguage;
+  taskLoadedAt?: number | null;
+  updatedAt: number;
 }
 
 export interface Settings {
@@ -356,6 +375,8 @@ export interface Settings {
   preferredVoice?: string | null;
   preferredVoiceHi?: string | null;
   task: ActiveTask | null;
+  recorderDraft?: RecorderDraft | null;
+  resolvedProblemWords?: ResolvedProblemWord[];
   profile?: UserProfile;
   coachPlan?: CoachPlan;
   coachPlanByLang?: Partial<Record<PracticeLanguage, CoachPlan>>;
@@ -576,6 +597,25 @@ export interface WordAttempt {
   recordingId?: string | null;
 }
 
+export type WordProblemType =
+  | "pronunciation"
+  | "stammering"
+  | "consonant_cluster"
+  | "syllable"
+  | "unclear_articulation"
+  | "sound_substitution"
+  | "other";
+
+export const WORD_PROBLEM_TYPE_LABELS: Record<WordProblemType, string> = {
+  pronunciation: "Pronunciation difficulty",
+  stammering: "Stammering / stuttering",
+  consonant_cluster: "Difficult consonant combination",
+  syllable: "Syllable difficulty",
+  unclear_articulation: "Unclear articulation",
+  sound_substitution: "Sound substitution",
+  other: "Other",
+};
+
 export interface PersonalWord {
   id: string;
   word: string;
@@ -589,7 +629,17 @@ export interface PersonalWord {
   exampleSentence: string;
   mouthGuide: WordMouthGuide;
   soundTags: SoundCategoryKey[];
-  source: "manual" | "assessment" | "exercise";
+  source: "manual" | "assessment" | "exercise" | "quick-practice";
+  problemType?: WordProblemType;
+  problemTypeOther?: string;
+  difficultPart?: string;
+  customPronunciation?: string;
+  detectedPronunciation?: string;
+  userRecordingBlobKey?: string;
+  userRecordingMimeType?: string;
+  userRecordingTranscript?: string;
+  clearedFromActive?: boolean;
+  clearedAt?: number;
   notes?: string;
   attempts: WordAttempt[];
   masteryScore: number; // 0..100

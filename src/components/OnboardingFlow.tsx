@@ -329,21 +329,26 @@ export default function OnboardingFlow({
           }
         >
           <div className="grid gap-5">
-            <CoachedText exercise={diagEx} compact />
-            <InlineRecorder
-              title={practiceLanguage === "hi" ? "Hindi Speaking Baseline" : "Initial Speaking Baseline"}
-              mode="diagnostic"
-              language={practiceLanguage}
-              scriptText={diagEx.plainText}
-              exerciseId={diagEx.id}
-              targetWpm={diagEx.targetWpm}
-              saveLabel="Save Baseline & Generate My Plan →"
+            <CoachedText
+              exercise={diagEx}
               compact
-              onSaved={(rec, assessment) => {
-                setBaselineId(rec.id);
-                setBaselineAssessment(assessment);
-                setStep(4);
-              }}
+              aboveBriefing={
+                <InlineRecorder
+                  title={practiceLanguage === "hi" ? "Hindi Speaking Baseline" : "Initial Speaking Baseline"}
+                  mode="diagnostic"
+                  language={practiceLanguage}
+                  scriptText={diagEx.plainText}
+                  exerciseId={diagEx.id}
+                  targetWpm={diagEx.targetWpm}
+                  saveLabel="Save Baseline & Generate My Plan →"
+                  compact
+                  onSaved={(rec, assessment) => {
+                    setBaselineId(rec.id);
+                    setBaselineAssessment(assessment);
+                    setStep(4);
+                  }}
+                />
+              }
             />
             <div className="flex items-center justify-between border-t border-[var(--line)] pt-3">
               <Btn variant="ghost" onClick={() => setStep(2)}>← Back to Profile</Btn>

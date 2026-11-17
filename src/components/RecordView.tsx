@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStore } from "@/lib/store";
 import {
   buildAnalysis,
@@ -21,11 +22,15 @@ import {
   type SkillScore,
 } from "@/lib/coach";
 import { BUILTIN_EXERCISES, dayProgressLabel } from "@/lib/program";
+import { getMaterialsForLanguage } from "@/lib/materials";
+import { isStructuredTask } from "@/lib/structuredSpeaking";
 import {
   EMPTY_SCORES,
   PRACTICE_LANGUAGE_META,
   fmtDur,
   uid,
+  type CoachedExercise,
+  type Exercise,
   type PitchSample,
   type PracticeLanguage,
   type Recording,
@@ -33,9 +38,10 @@ import {
   type SelfScores,
   type VolumeSample,
 } from "@/lib/types";
-import { speakSingle } from "@/lib/tts";
-import { Btn, Card, Chip, DotRating, Input, MicHelperBanner, PitchContour, SectionLabel, Textarea, VoiceWaveBars, VolumeTimeline } from "./ui";
+import { speakSingle, stopSpeaking } from "@/lib/tts";
+import { Btn, Card, Chip, DotRating, Input, MicHelperBanner, PitchContour, SectionLabel, Select, Textarea, VoiceWaveBars, VolumeTimeline } from "./ui";
 import { AnnotatedScript } from "./CoachedText";
+import { StructuredSpeakingGuide } from "./StructuredSpeakingGuide";
 import AssessmentReport from "./AssessmentReport";
 
 type Phase = "idle" | "recording" | "review";
@@ -44,14 +50,247 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
   const { settings, practiceLanguage, setSettings, saveRecording, addLog, toast, recordings, exercises, openAddWord } = useStore();
 
   const task = settings.task;
+  const draft = settings.recorderDraft;
   const recLang: PracticeLanguage = task?.language ?? practiceLanguage;
-  const [script, setScript] = useState(task?.script ?? "");
-  const [title, setTitle] = useState(task?.title ?? "");
+
+  // Prefer newly loaded task if newer than manual draft; otherwise preserve user's persisted script & title
+  const initialScript = useMemo(() => {
+    if (task && (!draft || (task.loadedAt ?? 0) > draft.updatedAt)) {
+      return task.script ?? "";
+    }
+    if (draft && (draft.script || draft.title)) {
+      return draft.script;
+    }
+    return task?.script ?? "";
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const initialTitle = useMemo(() => {
+    if (task && (!draft || (task.loadedAt ?? 0) > draft.updatedAt)) {
+      return task.title ?? "";
+    }
+    if (draft && (draft.script || draft.title)) {
+      return draft.title;
+    }
+    return task?.title ?? "";
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [script, setScriptState] = useState(initialScript);
+  const [title, setTitleState] = useState(initialTitle);
   const [phase, setPhase] = useState<Phase>("idle");
   const [live, setLive] = useState("");
   const [manual, setManual] = useState("");
   const [usingManual, setUsingManual] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+
+  // Refs prevent stale closures inside MediaRecorder.onstop and preserve user edits across renders
+  const scriptRef = useRef(script);
+  const titleRef = useRef(title);
+  const taskRef = useRef(task);
+  const recLangRef = useRef(recLang);
+  const lastLoadedAtRef = useRef<number>(task?.loadedAt ?? 0);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDraftRef = useRef<NonNullable<typeof settings.recorderDraft> | null>(null);
+
+  useEffect(() => {
+    scriptRef.current = script;
+  }, [script]);
+  useEffect(() => {
+    titleRef.current = title;
+  }, [title]);
+  useEffect(() => {
+    taskRef.current = task;
+    recLangRef.current = recLang;
+  }, [task, recLang]);
+
+  const persistDraft = useCallback(
+    (nextTitle: string, nextScript: string, taskLoadedAt?: number | null) => {
+      const payload = {
+        title: nextTitle,
+        script: nextScript,
+        language: recLangRef.current,
+        taskLoadedAt:
+          taskLoadedAt !== undefined ? taskLoadedAt : taskRef.current?.loadedAt ?? null,
+        updatedAt: Date.now(),
+      };
+      pendingDraftRef.current = payload;
+      if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = setTimeout(() => {
+        pendingDraftRef.current = null;
+        setSettings({ recorderDraft: payload });
+      }, 200);
+    },
+    [setSettings]
+  );
+
+  const updateScript = useCallback(
+    (nextScript: string) => {
+      scriptRef.current = nextScript;
+      setScriptState(nextScript);
+      persistDraft(titleRef.current, nextScript);
+    },
+    [persistDraft]
+  );
+
+  const updateTitle = useCallback(
+    (nextTitle: string) => {
+      titleRef.current = nextTitle;
+      setTitleState(nextTitle);
+      persistDraft(nextTitle, scriptRef.current);
+    },
+    [persistDraft]
+  );
+
+  // Sync ONLY when the user explicitly loads a different/fresh exercise (new loadedAt timestamp)
+  useEffect(() => {
+    if (!task) return;
+    const stamp = task.loadedAt ?? 0;
+    if (stamp > 0 && stamp !== lastLoadedAtRef.current) {
+      lastLoadedAtRef.current = stamp;
+      const nextScript = task.script ?? "";
+      const nextTitle = task.title ?? "";
+      scriptRef.current = nextScript;
+      titleRef.current = nextTitle;
+      setScriptState(nextScript);
+      setTitleState(nextTitle);
+      setSettings({
+        recorderDraft: {
+          title: nextTitle,
+          script: nextScript,
+          language: task.language ?? recLangRef.current,
+          taskLoadedAt: stamp,
+          updatedAt: stamp,
+        },
+      });
+    }
+  }, [task, setSettings]);
+
+  useEffect(() => {
+    return () => {
+      if (draftTimerRef.current) {
+        clearTimeout(draftTimerRef.current);
+        draftTimerRef.current = null;
+      }
+      if (pendingDraftRef.current) {
+        const flush = pendingDraftRef.current;
+        pendingDraftRef.current = null;
+        setSettings({ recorderDraft: flush });
+      }
+    };
+  }, [setSettings]);
+
+  // All coached + library exercises available to load directly into the Script box
+  const coachedMaterials = useMemo(
+    () => getMaterialsForLanguage(practiceLanguage),
+    [practiceLanguage]
+  );
+  const libraryExercises = useMemo(
+    () => [...exercises, ...BUILTIN_EXERCISES].filter((e) => e.material.length > 0),
+    [exercises]
+  );
+
+  const handlePickExercise = (value: string) => {
+    if (!value) return;
+    stopSpeaking();
+    const now = Date.now();
+    if (value.startsWith("cm:")) {
+      const id = value.slice(3);
+      const ex: CoachedExercise | undefined = coachedMaterials.find((m) => m.id === id);
+      if (!ex) return;
+      lastLoadedAtRef.current = now;
+      scriptRef.current = ex.plainText;
+      titleRef.current = ex.title;
+      setScriptState(ex.plainText);
+      setTitleState(ex.title);
+      setSettings({
+        task: {
+          title: ex.title,
+          mode: ex.materialType === "impromptu" ? "impromptu" : ex.materialType,
+          language: ex.language ?? practiceLanguage,
+          script: ex.plainText,
+          romanizedText: ex.romanizedText,
+          exerciseId: ex.id,
+          targetWpm: ex.targetWpm,
+          annotatedText: ex.annotatedText,
+          structureSteps: ex.structureSteps,
+          loadedAt: now,
+          coaching: {
+            whatToDo: ex.whatToDo,
+            howToSpeak: ex.howToSpeak,
+            emphasisWords: ex.emphasisWords,
+            pauseNotes: ex.pauseNotes,
+            mistakesToAvoid: ex.mistakesToAvoid,
+          },
+        },
+        recorderDraft: {
+          title: ex.title,
+          script: ex.plainText,
+          language: ex.language ?? practiceLanguage,
+          taskLoadedAt: now,
+          updatedAt: now,
+        },
+      });
+      toast(`Loaded "${ex.title}"`, "info");
+      return;
+    }
+    if (value.startsWith("lib:")) {
+      const id = value.slice(4);
+      const ex: Exercise | undefined = libraryExercises.find((e) => e.id === id);
+      if (!ex) return;
+      const combined = ex.material.map((m) => m.replace(/\*\*(.+?)\*\*/g, "$1")).join("\n");
+      const exLang: PracticeLanguage = ex.language === "hi" ? "hi" : "en";
+      lastLoadedAtRef.current = now;
+      scriptRef.current = combined;
+      titleRef.current = ex.name;
+      setScriptState(combined);
+      setTitleState(ex.name);
+      setSettings({
+        task: {
+          title: ex.name,
+          mode: ex.category,
+          language: exLang,
+          exerciseId: ex.id,
+          script: combined,
+          loadedAt: now,
+        },
+        recorderDraft: {
+          title: ex.name,
+          script: combined,
+          language: exLang,
+          taskLoadedAt: now,
+          updatedAt: now,
+        },
+      });
+      toast(`Loaded "${ex.name}"`, "info");
+    }
+  };
+
+  const handleClearScript = () => {
+    stopSpeaking();
+    pendingDraftRef.current = null;
+    if (draftTimerRef.current) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
+    }
+    lastLoadedAtRef.current = 0;
+    scriptRef.current = "";
+    titleRef.current = "";
+    setScriptState("");
+    setTitleState("");
+    setSettings({ task: null, recorderDraft: null });
+    toast("Script cleared", "info", 1800);
+  };
+
+  const handleResetToExercise = () => {
+    if (!task) return;
+    const orig = task.script ?? "";
+    const origTitle = task.title ?? "";
+    scriptRef.current = orig;
+    titleRef.current = origTitle;
+    setScriptState(orig);
+    setTitleState(origTitle);
+    persistDraft(origTitle, orig, task.loadedAt ?? null);
+    toast("Restored original exercise script", "info", 1800);
+  };
 
   const [rec, setRec] = useState<Recording | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -142,18 +381,23 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     if (disposed.current) return;
     const durationSec = Math.max(1, Math.round((Date.now() - startTs.current) / 1000));
     stopAll();
+    const activeScript = scriptRef.current.trim();
+    const activeTitle = titleRef.current.trim();
+    const activeTask = taskRef.current;
+    const activeLang = recLangRef.current;
+
     const transcript = finals.current.join(" ").replace(/\s+/g, " ").trim();
-    const cmp = script.trim() ? compareWords(script, transcript) : null;
+    const cmp = activeScript ? compareWords(activeScript, transcript) : null;
     const samples = [...tlRef.current];
     const pSamples = [...pitchRef.current];
     setTl(samples);
     setPitches(pSamples);
-    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples, recLang);
-    const targetWpm = task?.targetWpm ?? (recLang === "hi" ? 115 : 130);
+    const analysis = buildAnalysis(transcript, durationSec, samples, cmp, pSamples, activeLang);
+    const targetWpm = activeTask?.targetWpm ?? (activeLang === "hi" ? 115 : 130);
     const assessment = computeDetailedAssessment({
       analysis,
       self: null,
-      script: script.trim() || null,
+      script: activeScript || null,
       transcript,
       comparison: cmp,
       durationSec,
@@ -162,16 +406,16 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     const r: Recording = {
       id: uid(),
       createdAt: Date.now(),
-      title: title.trim() || `Session — ${dayProgressLabel(settings.currentDay)}`,
-      mode: task?.mode ?? "manual",
-      language: recLang,
-      scriptText: script.trim() || null,
+      title: activeTitle || `Session — ${dayProgressLabel(settings.currentDay)}`,
+      mode: activeTask?.mode ?? "manual",
+      language: activeLang,
+      scriptText: activeScript || null,
       transcript,
       durationSec,
       analysis,
       self: null,
       assessment,
-      exerciseId: task?.exerciseId ?? null,
+      exerciseId: activeTask?.exerciseId ?? null,
       targetWpm,
       hasAudio: !!audio && audio.size > 0,
       mimeType: audio?.type ?? "audio/webm",
@@ -195,6 +439,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
   };
 
   const start = async () => {
+    stopSpeaking();
     setMicError(null);
     setAudioError(null);
     finals.current = [];
@@ -320,14 +565,16 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
   };
 
   const openManualSession = () => {
-    const durationSec = Math.max(20, Math.round((Math.max(30, script.split(/\s+/).length) / 125) * 60));
+    const curScript = scriptRef.current.trim();
+    const curTitle = titleRef.current.trim();
+    const durationSec = Math.max(20, Math.round((Math.max(30, curScript.split(/\s+/).length) / 125) * 60));
     const blank: Recording = {
       id: uid(),
       createdAt: Date.now(),
-      title: title.trim() || `Manual Check — ${dayProgressLabel(settings.currentDay)}`,
+      title: curTitle || `Manual Check — ${dayProgressLabel(settings.currentDay)}`,
       mode: task?.mode ?? "manual",
       language: recLang,
-      scriptText: script.trim() || null,
+      scriptText: curScript || null,
       transcript: "",
       durationSec,
       analysis: buildAnalysis("", durationSec, [], null, undefined, recLang),
@@ -343,7 +590,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
     setBlobUrl(null);
     setTl([]);
     setPitches([]);
-    setManual(script.trim());
+    setManual(curScript);
     setUsingManual(true);
     setSaved(false);
     setPhase("review");
@@ -410,7 +657,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
       overallScore: liveAssessment.overallScore,
       note: full.title,
     });
-    setSettings({ task: null });
+    // Keep the loaded/edited script and task intact so the user never loses their script after saving!
     toast(`Recording saved — ${liveAssessment.overallScore}/100 (${fmtDur(rec.durationSec)})`);
     setRec(full);
     setSaved(true);
@@ -423,10 +670,10 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
 
   const practiceSentence = (sentTitle: string, sentText: string) => {
     if (liveAssessment) setPreviousAttemptScore(liveAssessment.overallScore);
-    setTitle(sentTitle);
-    setScript(sentText);
+    updateTitle(sentTitle);
+    updateScript(sentText);
     setPhase("idle");
-    toast(`Loaded "${sentTitle}" — press Start recording to practice it cleanly.`, "info");
+    toast(`Loaded "${sentTitle}" — press Record My Voice to practice it cleanly.`, "info");
   };
 
   const download = () => {
@@ -485,98 +732,209 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
           }
         >
           {phase !== "recording" && (
-            <div className="grid gap-3">
+            <div className="grid gap-3.5">
+              {/* Interactive PREP / Structured Speaking Guide — ONLY when active exercise uses a timed speaking framework */}
+              {isStructuredTask(task) && task?.structureSteps && (
+                <StructuredSpeakingGuide
+                  title={task.title}
+                  structureSteps={task.structureSteps}
+                  durationSec={
+                    coachedMaterials.find((m) => m.id === task.exerciseId)?.durationSec ?? 90
+                  }
+                  language={recLang}
+                />
+              )}
+
               {/* Show coaching cues banner if task came from Coached Materials */}
-              {task?.annotatedText && (
+              {task?.annotatedText && script.trim() === (task.script ?? "").trim() && (
                 <div className="rounded-xl border border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,var(--panel2))] p-3.5">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <Chip tone="brand">
-                      {recLang === "hi" ? "Hindi Cues · हिन्दी" : "Active Coach Cues"} · target ~{task.targetWpm ?? (recLang === "hi" ? 115 : 130)} WPM
+                      {recLang === "hi" ? "Hindi Cues · हिन्दी" : "Active Coach Cues"} · target ~
+                      {task.targetWpm ?? (recLang === "hi" ? 115 : 130)} WPM
                     </Chip>
-                    {task.script && (
-                      <Btn
-                        variant="soft"
-                        onClick={() =>
-                          speakSingle(
-                            task.script,
-                            settings.ttsRate,
-                            recLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice,
-                            recLang
-                          )
-                        }
-                      >
-                        {recLang === "hi" ? "Hear Hindi model" : "Hear model audio"}
-                      </Btn>
+                    {script.trim() && (
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          className="word-ctrl-btn"
+                          onClick={() =>
+                            speakSingle(
+                              script.trim(),
+                              0.7,
+                              recLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice,
+                              recLang
+                            )
+                          }
+                        >
+                          ▶ 0.7x
+                        </button>
+                        <button
+                          type="button"
+                          className="word-ctrl-btn"
+                          onClick={() =>
+                            speakSingle(
+                              script.trim(),
+                              1.0,
+                              recLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice,
+                              recLang
+                            )
+                          }
+                        >
+                          ▶ 1.0x
+                        </button>
+                      </div>
                     )}
                   </div>
-                  <AnnotatedScript text={task.annotatedText} showCues />
+                  <AnnotatedScript text={task.annotatedText} showCues language={recLang} />
                   {task.romanizedText && (settings.showHindiRomanized ?? true) && (
                     <p className="mt-2 rounded-lg bg-[var(--panel)] p-2.5 text-[12.5px] leading-relaxed text-[var(--muted)]">
                       <strong className="text-[var(--ink)]">Romanized guide: </strong>
                       {task.romanizedText}
                     </p>
                   )}
-                  {task.coaching && (
-                    <p className="mt-2 border-t border-[var(--line)] pt-2 text-[12px] text-[var(--muted)]">
-                      <strong className="text-[var(--ink)]">Delivery tip: </strong>
-                      {task.coaching.howToSpeak}
-                    </p>
-                  )}
                 </div>
               )}
 
-              <div className="grid gap-3 sm:grid-cols-[240px_1fr]">
+              {/* Exercise Loader + Title Row */}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="lbl">Load practice exercise (optional)</span>
+                  <Select
+                    aria-label="Load practice exercise"
+                    value={
+                      task?.exerciseId
+                        ? coachedMaterials.some((m) => m.id === task.exerciseId)
+                          ? `cm:${task.exerciseId}`
+                          : libraryExercises.some((e) => e.id === task.exerciseId)
+                          ? `lib:${task.exerciseId}`
+                          : ""
+                        : ""
+                    }
+                    onChange={(e) => handlePickExercise(e.target.value)}
+                  >
+                    <option value="">— Select an exercise or write your own script —</option>
+                    <optgroup
+                      label={
+                        practiceLanguage === "hi"
+                          ? "Hindi Coached Materials"
+                          : "Coached Speaking Materials"
+                      }
+                    >
+                      {coachedMaterials.map((m) => (
+                        <option key={m.id} value={`cm:${m.id}`}>
+                          {m.title} ({m.difficulty})
+                        </option>
+                      ))}
+                    </optgroup>
+                    <optgroup label="Exercise Library (Drills & Passages)">
+                      {libraryExercises.map((e) => (
+                        <option key={e.id} value={`lib:${e.id}`}>
+                          {e.name} ({e.category})
+                        </option>
+                      ))}
+                    </optgroup>
+                  </Select>
+                </label>
+
                 <label className="block">
                   <span className="lbl">Title</span>
                   <Input
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => updateTitle(e.target.value)}
                     placeholder={`Check-in — ${dayProgressLabel(settings.currentDay)}`}
                   />
                 </label>
               </div>
-              <label className="block">
-                <span className="lbl">
-                  Script to compare against <span className="normal-case text-[var(--muted)]">(optional)</span>
-                </span>
+
+              {/* Persistent Script Box — stays visible & editable, never cleared unless user clicks Clear */}
+              <div>
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <label htmlFor="record-script-input" className="lbl !mb-0">
+                    Script to compare against{" "}
+                    <span className="normal-case font-normal text-[var(--muted)]">
+                      (stays saved while you record &amp; review)
+                    </span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[11.5px]">
+                    {script.trim() && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          speakSingle(
+                            script.trim(),
+                            settings.ttsRate || 0.9,
+                            recLang === "hi" ? settings.preferredVoiceHi : settings.preferredVoice,
+                            recLang
+                          )
+                        }
+                        className="font-semibold text-[var(--brand)] hover:underline"
+                      >
+                        ▶ Hear script
+                      </button>
+                    )}
+                    {task?.script && script !== task.script && (
+                      <button
+                        type="button"
+                        onClick={handleResetToExercise}
+                        className="font-semibold text-[var(--accent)] hover:underline"
+                      >
+                        Restore original
+                      </button>
+                    )}
+                    {(script || title || task) && (
+                      <button
+                        type="button"
+                        onClick={handleClearScript}
+                        className="font-semibold text-[var(--muted)] hover:text-[var(--bad)]"
+                      >
+                        Clear script
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <Textarea
+                  id="record-script-input"
                   rows={4}
                   value={script}
-                  onChange={(e) => setScript(e.target.value)}
-                  placeholder="Paste a passage, your interview answers, or any text you want to read. Leave empty for free speaking."
+                  onChange={(e) => updateScript(e.target.value)}
+                  placeholder="Select an exercise above, paste a passage, or type any lines to read aloud. Leave empty for free speaking."
                 />
-              </label>
+              </div>
+
+              {/* Primary Record My Voice Action Row — placed ABOVE any coaching tip */}
               <div className="flex flex-wrap items-center gap-2">
                 <Btn onClick={start}>
                   <svg className="mr-1" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
                     <circle cx="6" cy="4.5" r="3" />
                     <path d="M2.5 10.2c1-1.7 6-1.7 7 0" stroke="currentColor" strokeWidth="1.2" fill="none" />
                   </svg>
-                  Start recording
+                  Record My Voice
                 </Btn>
                 <Btn variant="ghost" onClick={openManualSession}>
                   Manual transcript check
                 </Btn>
-                {task && (
-                  <Btn
-                    variant="ghost"
-                    onClick={() => {
-                      setSettings({ task: null });
-                      setScript("");
-                      setTitle("");
-                    }}
-                  >
-                    Clear imported task
+                {(script || title || task) && (
+                  <Btn variant="ghost" onClick={handleClearScript}>
+                    Reset
                   </Btn>
                 )}
                 <span className="ml-auto text-[11.5px] text-[var(--muted)]">
                   {srSupported === null
                     ? "…"
                     : srSupported
-                    ? "Live audio + F0 pitch + speech-to-text available"
-                    : "Audio + F0 pitch available (manual transcript supported)"}
+                    ? "Live audio + F0 pitch + speech-to-text ready"
+                    : "Audio + F0 pitch ready (manual transcript supported)"}
                 </span>
               </div>
+
+              {task?.coaching && (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] px-3.5 py-2.5 text-[12px] text-[var(--muted)]">
+                  <strong className="text-[var(--ink)]">Coach Briefing: </strong>
+                  {task.coaching.howToSpeak}
+                </div>
+              )}
+
               <MicHelperBanner error={micError} onManual={openManualSession} />
             </div>
           )}
@@ -593,14 +951,39 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
                 </div>
                 <VoiceWaveBars level={tl[tl.length - 1]?.r ?? 0.03} />
                 <Btn variant="danger" onClick={stop} className="ml-auto">
-                  Stop & Score
+                  Stop &amp; Score
                 </Btn>
               </div>
-              {task?.annotatedText && (
-                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-3.5">
-                  <AnnotatedScript text={task.annotatedText} showCues />
-                </div>
+
+              {/* Structured Speaking Stage Guide during recording (ONLY for structured framework exercises) */}
+              {isStructuredTask(task) && task?.structureSteps && (
+                <StructuredSpeakingGuide
+                  title={task.title}
+                  structureSteps={task.structureSteps}
+                  durationSec={
+                    coachedMaterials.find((m) => m.id === task.exerciseId)?.durationSec ?? 90
+                  }
+                  language={recLang}
+                />
               )}
+
+              {/* ALWAYS keep the user's loaded/edited script visible while recording! */}
+              {task?.annotatedText && script.trim() === (task.script ?? "").trim() ? (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--panel2)] p-3.5">
+                  <SectionLabel>Reading Script</SectionLabel>
+                  <div className="mt-1.5">
+                    <AnnotatedScript text={task.annotatedText} showCues language={recLang} />
+                  </div>
+                </div>
+              ) : script.trim() ? (
+                <div className="rounded-xl border border-[var(--brand)] bg-[var(--panel2)] p-4">
+                  <SectionLabel>{title.trim() || "Reading Script"}</SectionLabel>
+                  <p className="mt-1.5 whitespace-pre-line text-[15px] leading-[1.9] text-[var(--ink)]">
+                    {script}
+                  </p>
+                </div>
+              ) : null}
+
               <VolumeTimeline tl={tl} />
               <div className="rounded-lg bg-[var(--panel2)] p-3 text-[13.5px] leading-relaxed">
                 {usingManual ? (
@@ -610,7 +993,7 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
                     {live} <span className="caret">▍</span>
                   </span>
                 ) : (
-                  <span className="text-[var(--muted)]">Listening… start talking clearly.</span>
+                  <span className="text-[var(--muted)]">Listening… start speaking clearly.</span>
                 )}
               </div>
             </div>
@@ -945,20 +1328,28 @@ function HistoryBridge({
     };
   }, [loaded, getBlob]);
 
-  if (!loaded) return null;
+  if (!loaded || typeof document === "undefined") return null;
   const assessment = getRecordingAssessment(loaded);
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/45 p-4 backdrop-blur-[2px]" onMouseDown={() => setTargetId(null)}>
-      <div className="mx-auto mt-6 max-w-3xl rounded-2xl bg-[var(--panel)] shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-3.5">
+  return createPortal(
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 p-3 backdrop-blur-[2px] sm:p-6"
+      onMouseDown={() => setTargetId(null)}
+    >
+      <div
+        className="modal-pop max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-[var(--line)] bg-[var(--panel)] text-[var(--ink)] shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <header className="sticky top-0 z-10 flex items-center justify-between border-b border-[var(--line)] bg-[var(--panel)] px-5 py-3.5">
           <div>
             <h3 className="font-display text-[15px] font-semibold">{loaded.title}</h3>
             <p className="text-[11.5px] text-[var(--muted)]">
               {loaded.dayLabel} · {fmtDur(loaded.durationSec)} · {new Date(loaded.createdAt).toLocaleString()}
             </p>
           </div>
-          <button className="icon-btn" onClick={() => setTargetId(null)} aria-label="Close">
+          <button type="button" className="icon-btn" onClick={() => setTargetId(null)} aria-label="Close">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8">
               <path d="M4 4l8 8M12 4l-8 8" />
             </svg>
@@ -972,6 +1363,7 @@ function HistoryBridge({
           </p>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
