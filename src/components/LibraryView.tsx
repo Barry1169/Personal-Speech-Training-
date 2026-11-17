@@ -13,7 +13,7 @@ const emptyForm = {
 };
 
 export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
-  const { settings, setSettings, exercises, addExercise, updateExercise, deleteExercise, toggleFavorite, toast } = useStore();
+  const { settings, setSettings, exercises, addExercise, updateExercise, deleteExercise, toggleFavorite, openAddWord, toast } = useStore();
   const [q, setQ] = useState("");
   const [cat, setCat] = useState("all");
   const [diff, setDiff] = useState("all");
@@ -148,6 +148,9 @@ export default function LibraryView({ nav }: { nav?: (v: string) => void }) {
             )}
             <div className="flex flex-wrap gap-2">
               <Timer resetKey={detail.id} seconds={detail.durationSec} />
+              <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
+                + Add My Word
+              </Btn>
               {nav && (
                 <Btn
                   variant="primary"

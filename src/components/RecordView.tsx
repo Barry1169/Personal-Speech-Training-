@@ -39,7 +39,7 @@ import AssessmentReport from "./AssessmentReport";
 type Phase = "idle" | "recording" | "review";
 
 export default function RecordView({ nav }: { nav: (v: string) => void }) {
-  const { settings, setSettings, saveRecording, addLog, toast, recordings, exercises } = useStore();
+  const { settings, setSettings, saveRecording, addLog, toast, recordings, exercises, openAddWord } = useStore();
 
   const task = settings.task;
   const [script, setScript] = useState(task?.script ?? "");
@@ -472,6 +472,11 @@ export default function RecordView({ nav }: { nav: (v: string) => void }) {
         <Card
           title={phase === "recording" ? "Recording…" : "Record & assess"}
           sub="Speak against a script for word & sentence comparison, or free-talk for pure acoustic & fluency scoring."
+          right={
+            <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
+              + Add My Word
+            </Btn>
+          }
         >
           {phase !== "recording" && (
             <div className="grid gap-3">

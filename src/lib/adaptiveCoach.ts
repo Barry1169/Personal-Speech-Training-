@@ -329,7 +329,8 @@ export function selectDailySession(
   plan: CoachPlan,
   recordings: Recording[],
   debriefs: SessionDebrief[],
-  dateStr: string = dateKey()
+  dateStr: string = dateKey(),
+  customWordExercise?: CoachedExercise | null
 ): DailySessionPlan {
   const seed = hashDay(dateStr);
   const lastDebrief = debriefs[0];
@@ -388,6 +389,17 @@ export function selectDailySession(
     if (profile.dailyMinutes >= 25 && !chosen.some((c) => c.materialType === "long_passage")) {
       const ex4 = pickBestMaterial(["long_passage"], plan.difficulty, prioritySkills, recentIds, seed + 17, desiredFocusTags);
       chosen.push(ex4);
+    }
+  }
+
+  // Include user's Personal Word Bank custom drill right in today's session without overloading their budget
+  if (customWordExercise) {
+    if (profile.dailyMinutes <= 10 && chosen.length >= 2) {
+      chosen = [chosen[0], customWordExercise];
+    } else if (chosen.length >= 3) {
+      chosen = [chosen[0], customWordExercise, ...chosen.slice(2)];
+    } else {
+      chosen = [...chosen, customWordExercise];
     }
   }
 

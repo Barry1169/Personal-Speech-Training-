@@ -47,6 +47,7 @@ function ProgramExerciseCard({
   onTick: (s: number) => void;
   onSendScript: (title: string, text: string) => void;
 }) {
+  const { openAddWord } = useStore();
   const [open, setOpen] = useState(false);
   const hasMaterial = ex.material && ex.material.length > 0;
   return (
@@ -127,6 +128,9 @@ function ProgramExerciseCard({
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Timer resetKey={ex.name} seconds={ex.durationSec} onTick={onTick} />
+            <Btn variant="soft" onClick={() => openAddWord("", "exercise")}>
+              + Add My Word
+            </Btn>
             <Btn variant={done ? "ghost" : "primary"} onClick={onDone} className="ml-auto">
               {done ? "Undo" : "Done"}
             </Btn>
@@ -227,11 +231,16 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
     saveDebrief,
     setGuidedOpen,
     setOnboardingOpen,
+    openAddWord,
+    setPracticeWordId,
     toast,
     recordings,
     debriefs,
     exercises,
     logs,
+    words,
+    dueWords,
+    weakSounds,
   } = useStore();
 
   const [tab, setTab] = useState<"coach" | "curriculum">("coach");
@@ -721,6 +730,66 @@ export default function TodayView({ nav }: { nav: (v: string) => void }) {
               )}
             </Card>
           )}
+
+          {/* Personal Pronunciation Word Bank & Due Spaced Reviews */}
+          <Card
+            title="My Pronunciation Word Bank"
+            sub={
+              dueWords.length > 0
+                ? `${dueWords.length} difficult word${dueWords.length === 1 ? "" : "s"} due for spaced review today`
+                : `${words.length} saved word${words.length === 1 ? "" : "s"} tracked`
+            }
+            right={
+              <Btn variant="soft" onClick={() => openAddWord("", "manual")}>
+                + Add Word
+              </Btn>
+            }
+          >
+            {words.length === 0 ? (
+              <div className="grid gap-2.5">
+                <p className="text-[12.5px] text-[var(--muted)]">
+                  Save words you find hard to pronounce. They automatically weave into your daily sentences, paragraphs, and spaced-repetition drills.
+                </p>
+                <Btn variant="ghost" onClick={() => nav("words")}>
+                  Open Word Bank →
+                </Btn>
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {(dueWords.length > 0 ? dueWords : words).slice(0, 6).map((w) => (
+                    <button
+                      key={w.id}
+                      type="button"
+                      onClick={() => setPracticeWordId(w.id)}
+                      className={`chip cursor-pointer hover:brightness-95 ${
+                        w.status === "difficult" ? "chip-bad" : w.status === "learning" ? "chip-warn" : "chip-good"
+                      }`}
+                      title={`Practice "${w.word}" (${w.phonetic}) — ${w.masteryScore}/100`}
+                    >
+                      {w.word} · {w.masteryScore}%
+                    </button>
+                  ))}
+                </div>
+                {weakSounds.length > 0 && (
+                  <div className="rounded-lg bg-[var(--panel2)] px-3 py-2 text-[11.5px] text-[var(--muted)]">
+                    <strong className="text-[var(--ink)]">Detected weak sounds: </strong>
+                    {weakSounds.slice(0, 3).map((s) => `${s.short} (${s.phonemes})`).join(" · ")}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  {dueWords.length > 0 && (
+                    <Btn onClick={() => setPracticeWordId(dueWords[0].id)}>
+                      Practice Due Word →
+                    </Btn>
+                  )}
+                  <Btn variant="ghost" onClick={() => nav("words")}>
+                    Open Word Bank
+                  </Btn>
+                </div>
+              </div>
+            )}
+          </Card>
 
           {/* Favorites */}
           <Card title="Your favorite exercises" sub="Starred from the Library.">
